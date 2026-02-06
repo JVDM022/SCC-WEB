@@ -1,10 +1,55 @@
 from __future__ import annotations
 
+import ast
+import importlib.util
+import pkgutil
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Any, Dict, List
 
-from flask import Flask, abort, g, jsonify, redirect, render_template_string, request, url_for
+# Python 3.14: legacy AST node aliases removed. Werkzeug still expects them.
+if not hasattr(ast, "Str"):
+    ast.Str = ast.Constant  # type: ignore[attr-defined]
+if not hasattr(ast, "Bytes"):
+    ast.Bytes = ast.Constant  # type: ignore[attr-defined]
+if not hasattr(ast, "Num"):
+    ast.Num = ast.Constant  # type: ignore[attr-defined]
+if not hasattr(ast, "NameConstant"):
+    ast.NameConstant = ast.Constant  # type: ignore[attr-defined]
+
+# Provide legacy attribute access on ast.Constant for older AST APIs.
+if not hasattr(ast.Constant, "s"):
+    def _get_s(self):
+        return self.value
+
+    def _set_s(self, value):
+        self.value = value
+
+    ast.Constant.s = property(_get_s, _set_s)  # type: ignore[attr-defined]
+
+if not hasattr(ast.Constant, "n"):
+    def _get_n(self):
+        return self.value
+
+    def _set_n(self, value):
+        self.value = value
+
+    ast.Constant.n = property(_get_n, _set_n)  # type: ignore[attr-defined]
+
+# Flask 3.0 + Python 3.14 compatibility: pkgutil.get_loader was removed.
+if not hasattr(pkgutil, "get_loader"):
+    def _get_loader(name: str):
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ValueError, ImportError):
+            return None
+        return spec.loader if spec else None
+
+    pkgutil.get_loader = _get_loader  # type: ignore[attr-defined]
+
+from flask import Flask, abort, g, jsonify, request
+from reactpy import component, event, hooks, html
+from reactpy.backend.flask import Options, configure
 
 app = Flask(__name__)
 DATABASE = "project.db"
@@ -84,1608 +129,6 @@ ENTITY_DEFS = {
         ],
     },
 }
-
-HOME_TEMPLATE = """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ project.name or "Project Hub" }}</title>
-    <style>
-      :root {
-        --bg: #f5f2ec;
-        --bg-accent: #f1ede3;
-        --ink: #1f2a2e;
-        --muted: #5c6b73;
-        --card: #ffffff;
-        --border: #e3ddd1;
-        --accent: #2c6e63;
-        --accent-2: #f2b880;
-        --danger: #c84b4b;
-        --shadow: 0 18px 40px rgba(32, 41, 40, 0.12);
-      }
-
-      * { box-sizing: border-box; }
-
-      body {
-        margin: 0;
-        font-family: "Avenir Next", "Optima", "Gill Sans", "Trebuchet MS", sans-serif;
-        color: var(--ink);
-        background:
-          radial-gradient(circle at top left, #ffffff 0%, var(--bg) 45%),
-          repeating-linear-gradient(
-            135deg,
-            rgba(0, 0, 0, 0.015) 0,
-            rgba(0, 0, 0, 0.015) 12px,
-            rgba(255, 255, 255, 0.015) 12px,
-            rgba(255, 255, 255, 0.015) 24px
-          );
-      }
-
-      h1, h2 {
-        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
-        letter-spacing: 0.2px;
-      }
-
-      h1 { margin: 0 0 8px; font-size: 34px; }
-      h2 { margin: 0; font-size: 20px; }
-
-      .page {
-        max-width: 1100px;
-        margin: 0 auto;
-        padding: 32px 20px 60px;
-        display: grid;
-        gap: 20px;
-      }
-
-      .card {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        padding: 20px;
-        box-shadow: var(--shadow);
-        animation: cardIn 0.5s ease forwards;
-        opacity: 0;
-        transform: translateY(10px);
-        animation-delay: var(--delay, 0s);
-      }
-
-      @keyframes cardIn {
-        to { opacity: 1; transform: translateY(0); }
-      }
-
-      .hero {
-        display: grid;
-        gap: 16px;
-      }
-
-      .eyebrow {
-        text-transform: uppercase;
-        letter-spacing: 0.2em;
-        font-size: 11px;
-        color: var(--muted);
-      }
-
-      .meta-grid {
-        display: grid;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 14px;
-      }
-
-      .actions {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-
-      .section-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-        margin-bottom: 12px;
-      }
-
-      .btn {
-        border: 1px solid var(--border);
-        background: #f7f4ee;
-        padding: 8px 12px;
-        border-radius: 10px;
-        cursor: pointer;
-        text-decoration: none;
-        color: var(--ink);
-        font-size: 14px;
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
-      }
-
-      .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
-      .btn.primary { background: linear-gradient(120deg, var(--accent), #3f8b7e); color: #fff; border: none; }
-      .link-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 8px;
-        border-radius: 999px;
-        border: 1px solid var(--border);
-        font-size: 12px;
-        margin-top: 8px;
-      }
-      .link-pill.valid { background: #e9f6ef; border-color: #b7dec7; color: #1f6b46; }
-      .link-pill.invalid { background: #ffe5e5; border-color: #f0b1b1; color: #8b2f2f; }
-      .toggle-row {
-        display: grid;
-        gap: 10px;
-        width: 100%;
-      }
-      .status-pill {
-        padding: 4px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 600;
-      }
-      .status-online { background: #e9f6ef; color: #1f6b46; border: 1px solid #b7dec7; }
-      .status-offline { background: #ffe5e5; color: #8b2f2f; border: 1px solid #f0b1b1; }
-      .status-toggle {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-        width: 100%;
-        min-height: 48px;
-      }
-      .status-btn {
-        width: 100%;
-        border: 1px solid var(--border);
-        background: #f1ede3;
-        color: var(--muted);
-        padding: 14px 18px;
-        border-radius: 999px;
-        font-size: 14px;
-        cursor: pointer;
-        text-align: center;
-        min-height: 44px;
-        appearance: none;
-        -webkit-appearance: none;
-        box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.04);
-      }
-      .status-btn.active {
-        background: #e1efe9;
-        border-color: #b9d9ce;
-        color: var(--accent);
-        font-weight: 600;
-      }
-      .status-btn.online.active {
-        background: #dff6e6;
-        border-color: #a9e2bb;
-        color: #1f6b46;
-      }
-      .status-btn.offline.active {
-        background: #ffe5e5;
-        border-color: #f0b1b1;
-        color: #8b2f2f;
-      }
-      .offline-only { display: block; }
-      .btn-danger { border-color: #e0b2b2; color: var(--danger); background: #fff7f7; }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 14px;
-      }
-
-      th, td {
-        text-align: left;
-        padding: 10px 8px;
-        border-bottom: 1px solid var(--border);
-      }
-
-      th {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-      }
-
-      tbody tr:hover { background: var(--bg-accent); }
-
-      .muted { color: var(--muted); }
-      .inline { display: inline; }
-      .table-wrap { overflow-x: auto; }
-      .progress-list { display: grid; gap: 12px; }
-      .progress-card {
-        background: #fbf8f1;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 12px;
-        display: grid;
-        gap: 10px;
-      }
-      .progress-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-      .progress-title { font-weight: 600; }
-      .progress-meta { font-size: 12px; color: var(--muted); }
-      .progress-bar {
-        position: relative;
-        height: 10px;
-        border-radius: 999px;
-        background: #e7e0d2;
-        overflow: hidden;
-      }
-      .progress-bar span {
-        display: block;
-        height: 100%;
-        background: linear-gradient(90deg, var(--accent), var(--accent-2));
-      }
-      .progress-needle {
-        position: absolute;
-        top: -6px;
-        width: 2px;
-        height: 22px;
-        background: var(--ink);
-        left: 0%;
-        transform: translateX(-1px);
-      }
-      .phase-track {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 6px;
-        margin-top: 8px;
-      }
-      .phase-step {
-        text-align: center;
-        font-size: 11px;
-        padding: 6px 4px;
-        border-radius: 999px;
-        background: #f1ede3;
-        color: var(--muted);
-        border: 1px solid var(--border);
-        appearance: none;
-      }
-      .phase-step.active {
-        background: #e1efe9;
-        color: var(--accent);
-        border-color: #b9d9ce;
-        font-weight: 600;
-      }
-      .progress-actions { display: flex; gap: 8px; align-items: center; }
-      .log-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        margin-top: 16px;
-      }
-      .log-list { display: grid; gap: 12px; margin-top: 12px; }
-      .log-entry {
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 12px;
-        background: #ffffff;
-        display: grid;
-        gap: 6px;
-      }
-      .log-title { font-weight: 600; }
-      .log-meta { font-size: 12px; color: var(--muted); }
-      .log-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-      .card.collapsed .section-body { display: none; }
-      .section-hint { font-size: 12px; color: var(--muted); }
-      .card.draggable { cursor: grab; }
-      .card.dragging { opacity: 0.65; }
-      .badge {
-        display: inline-block;
-        padding: 4px 8px;
-        border-radius: 999px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        background: #f1ede3;
-        color: var(--muted);
-        border: 1px solid var(--border);
-      }
-      .badge-schematic { background: #e6f0ff; border-color: #bcd3ff; color: #2b4d8b; }
-      .badge-cad { background: #f0f2ff; border-color: #c6ccff; color: #404d9c; }
-      .badge-pdf { background: #ffeef0; border-color: #f5c0c7; color: #8b2f2f; }
-      .link-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 8px;
-        border-radius: 999px;
-        border: 1px solid var(--border);
-        font-size: 12px;
-      }
-      .link-pill.valid { background: #e9f6ef; border-color: #b7dec7; color: #1f6b46; }
-      .link-pill.invalid { background: #ffe5e5; border-color: #f0b1b1; color: #8b2f2f; }
-      .modal {
-        position: fixed;
-        inset: 0;
-        background: rgba(26, 32, 36, 0.45);
-        display: none;
-        align-items: center;
-        justify-content: center;
-        padding: 24px;
-        z-index: 40;
-      }
-      .modal.open { display: flex; }
-      .modal-card {
-        width: min(720px, 95vw);
-        background: #fffdf8;
-        border-radius: 16px;
-        border: 1px solid var(--border);
-        box-shadow: var(--shadow);
-        padding: 22px;
-        display: grid;
-        gap: 12px;
-        max-height: 80vh;
-        overflow: auto;
-      }
-      .modal-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-      }
-      .modal-title { font-size: 20px; margin: 0; }
-      .modal-label {
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-      }
-      .modal-section { display: grid; gap: 6px; }
-      .modal-body { white-space: pre-wrap; line-height: 1.5; }
-      .modal-close {
-        border: 1px solid var(--border);
-        background: #f7f4ee;
-        padding: 6px 10px;
-        border-radius: 999px;
-        cursor: pointer;
-      }
-      .calendar {
-        display: grid;
-        grid-template-columns: 180px repeat(7, minmax(0, 1fr));
-        gap: 8px;
-        align-items: stretch;
-      }
-      .calendar-header {
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: var(--muted);
-        padding: 6px 8px;
-      }
-      .calendar-day {
-        background: #fffdf8;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 10px;
-        min-height: 120px;
-        display: grid;
-        gap: 6px;
-      }
-      .calendar-day.today {
-        border-color: #b9d9ce;
-        background: #f4fbf8;
-      }
-      .calendar-date {
-        font-weight: 600;
-        font-size: 14px;
-      }
-      .calendar-side {
-        border: 1px dashed var(--border);
-        border-radius: 12px;
-        padding: 10px;
-        background: #f7f4ee;
-        font-size: 12px;
-        color: var(--muted);
-      }
-      .task-bar {
-        padding: 8px 10px;
-        border-radius: 10px;
-        font-size: 13px;
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        align-items: center;
-        border: 1px solid transparent;
-      }
-      .task-bar small { font-size: 11px; color: var(--muted); }
-      .priority-high { background: #ffe5e5; border-color: #f0b1b1; color: #8b2f2f; }
-      .priority-medium { background: #fff0d9; border-color: #f1caa0; color: #8a5a12; }
-      .priority-low { background: #e9f6ef; border-color: #b7dec7; color: #1f6b46; }
-      .task-status {
-        display: inline-flex;
-        align-items: center;
-        padding: 2px 8px;
-        border-radius: 999px;
-        font-size: 11px;
-        font-weight: 600;
-        margin-left: 8px;
-        border: 1px solid transparent;
-      }
-      .task-status.status-not-started { background: #f1ede3; border-color: #d8d1c4; color: #5c6b73; }
-      .task-status.status-progress { background: #e7f0ff; border-color: #b9cdee; color: #2b4b7a; }
-      .task-status.status-done { background: #e9f6ef; border-color: #b7dec7; color: #1f6b46; }
-      .risk-status {
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 600;
-        border: 1px solid transparent;
-        text-transform: capitalize;
-      }
-      .risk-status.risk-ongoing { background: #ffe5e5; border-color: #f0b1b1; color: #8b2f2f; }
-      .risk-status.risk-resolved { background: #e9f6ef; border-color: #b7dec7; color: #1f6b46; }
-      .risk-status.risk-neutral { background: #f1ede3; border-color: #d8d1c4; color: #5c6b73; }
-      .bom-status {
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 600;
-        border: 1px solid transparent;
-        text-transform: capitalize;
-      }
-      .bom-status.purchased { background: #e6f0ff; border-color: #bcd3ff; color: #2b4d8b; }
-      .bom-status.not-purchased { background: #ffe5e5; border-color: #f0b1b1; color: #8b2f2f; }
-      .bom-status.neutral { background: #f1ede3; border-color: #d8d1c4; color: #5c6b73; }
-      .task-stack { display: grid; gap: 8px; }
-      .calendar-actions { display: flex; gap: 8px; align-items: center; }
-      @media (max-width: 980px) {
-        .calendar { grid-template-columns: 1fr; }
-      }
-
-      @media (max-width: 720px) {
-        h1 { font-size: 28px; }
-        .page { padding: 24px 16px 40px; }
-      }
-    </style>
-  </head>
-  <body data-entity="{{ entity or '' }}">
-    <main class="page">
-      <header class="card hero" style="--delay: 0s;">
-        <div>
-          <div class="eyebrow">Project hub</div>
-          <h1>{{ project.name or "Project" }}</h1>
-          <div class="meta-grid">
-            <div>Phase: {{ project.phase or "" }}</div>
-            <div>Last updated: {{ updated }}</div>
-          </div>
-        </div>
-        <div class="actions">
-          <a class="btn primary" href="{{ url_for('edit_project') }}">Edit project</a>
-        </div>
-      </header>
-      <div id="cardList">
-        {% for card in cards %}
-        <section
-          class="card draggable"
-          data-key="{{ card.key }}"
-          draggable="true"
-          style="--delay: {{ loop.index0 * 0.05 }}s;"
-        >
-          {% if card.type == "progress" %}
-          <div class="section-head">
-            <div>
-              <h2>Development Progress</h2>
-              <div class="muted">Single progress bar for overall development.</div>
-              <div class="section-hint">Double-click this header to open/close.</div>
-            </div>
-            <a class="btn" href="{{ url_for('edit_progress') }}">Edit</a>
-          </div>
-          <div class="section-body">
-            <div class="progress-card">
-              <div class="progress-head">
-                <div>
-                  <div class="progress-title">Overall development</div>
-                  {% if development.phase %}
-                  <div class="progress-meta">Phase: {{ development.phase }}</div>
-                  {% endif %}
-                </div>
-                {% if development.percent_label %}
-                <div class="progress-meta">{{ development.percent_label }}</div>
-                {% endif %}
-              </div>
-              <div class="progress-bar">
-                <span style="width: {{ development.percent_value }}%"></span>
-                <div class="progress-needle" style="left: {{ development.percent_value }}%"></div>
-              </div>
-              <div class="phase-track">
-                {% for phase in phases %}
-                <div class="phase-step {% if phase == development.phase %}active{% endif %}">{{ phase }}</div>
-                {% endfor %}
-              </div>
-              <div class="log-head" id="development-log">
-                <div>
-                  <div class="progress-title">Development log</div>
-                  <div class="muted">Add a daily update for the build.</div>
-                </div>
-                <a class="btn" href="{{ url_for('new_item', entity='development_log') }}">Add log</a>
-              </div>
-              {% if logs %}
-              <div class="log-list">
-                {% for log in logs %}
-                <div class="log-entry">
-                  <div class="log-meta">{{ log.log_date or "" }}</div>
-                  <div class="log-title">{{ log.summary or "Update" }}</div>
-                  {% if log.details %}
-                  <div class="muted">{{ log.details }}</div>
-                  {% endif %}
-                  <div class="log-actions">
-                    <a href="{{ url_for('edit_item', entity='development_log', item_id=log['id']) }}">Edit</a>
-                    <form class="inline" method="post" action="{{ url_for('delete_item', entity='development_log', item_id=log['id']) }}">
-                      <button class="btn btn-danger" type="submit">Delete</button>
-                    </form>
-                  </div>
-                </div>
-                {% endfor %}
-              </div>
-              {% else %}
-              <div class="muted">No log entries yet.</div>
-              {% endif %}
-            </div>
-          </div>
-          {% elif card.type == "tasks" %}
-          <div class="section-head">
-            <div>
-              <h2>Tasks</h2>
-              <div class="muted">Week view calendar with priority bars.</div>
-              <div class="section-hint">Double-click this header to open/close.</div>
-            </div>
-            <div class="calendar-actions">
-              <a class="btn" href="{{ url_for('new_item', entity='tasks') }}">Add task</a>
-            </div>
-          </div>
-          <div class="section-body">
-            <div class="task-stack">
-              {% for task in tasks.bars %}
-              <div class="task-bar {{ task.priority_class }}">
-                <div>
-                  {{ task.task }}
-                  <span class="task-status {{ task.status_class }}">{{ task.status_text }}</span>
-                  {% if task.due_date %}<small>· Due {{ task.due_date }}</small>{% endif %}
-                </div>
-                <div class="calendar-actions">
-                  <a href="{{ url_for('edit_item', entity='tasks', item_id=task['id']) }}">Edit</a>
-                  <form class="inline" method="post" action="{{ url_for('delete_item', entity='tasks', item_id=task['id']) }}">
-                    <button class="btn btn-danger" type="submit">Delete</button>
-                  </form>
-                </div>
-              </div>
-              {% endfor %}
-              {% if not tasks.bars %}
-              <div class="muted">No tasks yet.</div>
-              {% endif %}
-            </div>
-
-            <div class="calendar" style="margin-top: 16px;">
-              <div class="calendar-header">Week</div>
-              {% for day in tasks.days %}
-              <div class="calendar-header">{{ day.label }}</div>
-              {% endfor %}
-
-              <div class="calendar-side">
-                Week of {{ tasks.week_label }}
-                <div class="muted">Due dates shown in this week.</div>
-              </div>
-              {% for day in tasks.days %}
-              <div class="calendar-day {% if day.is_today %}today{% endif %}">
-                <div class="calendar-date">{{ day.date_label }}</div>
-                <div class="task-stack">
-                  {% for task in day.tasks %}
-                  <div class="task-bar {{ task.priority_class }}">
-                    <div>
-                      {{ task.task }}
-                    </div>
-                  </div>
-                  {% endfor %}
-                </div>
-              </div>
-              {% endfor %}
-            </div>
-          </div>
-          {% else %}
-          <div class="section-head">
-            <div>
-              <h2>{{ card.section.title }}</h2>
-              <div class="muted">Manage entries for {{ card.section.title|lower }}.</div>
-              <div class="section-hint">Double-click this header to open/close.</div>
-            </div>
-            {% if card.section.key == "system_status" %}
-            {% set status_row = card.section.rows[0] if card.section.rows else None %}
-            {% set status_href = url_for('edit_item', entity=card.section.key, item_id=status_row['id']) if status_row else url_for('new_item', entity=card.section.key) %}
-            <a class="btn" href="{{ status_href }}">Edit</a>
-            {% else %}
-            <a class="btn" href="{{ url_for('new_item', entity=card.section.key) }}">Add</a>
-            {% endif %}
-          </div>
-          <div class="section-body">
-            {% if card.section.rows %}
-            {% set system_online = card.section.key == "system_status" and card.section.rows and card.section.rows[0]['is_online'] in [1, "1", True, "true", "True"] %}
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    {% for field in card.section.fields %}
-                    {% if not (card.section.key == "risks" and field == "solution") and not (system_online and field in ["reason", "estimated_downtime"]) %}
-                    <th>{{ card.section.labels[field] }}</th>
-                    {% endif %}
-                    {% endfor %}
-                    {% if card.section.key == "documentation" %}
-                    <th>Link</th>
-                    {% endif %}
-                    {% if card.section.key != "system_status" %}
-                    <th>Actions</th>
-                    {% endif %}
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for row in card.section.rows %}
-                  <tr
-                    {% if card.section.key == "risks" %}
-                    class="risk-row"
-                    data-risk="{{ (row['risk'] or '')|e }}"
-                    data-impact="{{ (row['impact'] or '')|e }}"
-                    data-solution="{{ (row['solution'] or '')|e }}"
-                    data-status="{{ (row['status'] or '')|e }}"
-                    {% endif %}
-                  >
-                    {% for field in card.section.fields %}
-                    {% if not (card.section.key == "risks" and field == "solution") and not (system_online and field in ["reason", "estimated_downtime"]) %}
-                    <td>
-                      {% if card.section.key == "documentation" and field == "doc_type" %}
-                      {% set dtype = (row[field] or "")|lower %}
-                      <span class="badge {% if dtype == 'schematic' %}badge-schematic{% elif dtype == 'cad' %}badge-cad{% elif dtype == 'pdf' %}badge-pdf{% endif %}">
-                        {{ row[field] or "" }}
-                      </span>
-                      {% elif card.section.key == "documentation" and field == "location" %}
-                      {% if row[field] %}
-                      <span class="link-pill valid">Onedrive</span>
-                      {% else %}
-                      <span class="muted">No link</span>
-                      {% endif %}
-                      {% elif card.section.key == "bom" and field == "link" %}
-                      {% if row[field] %}
-                      <a class="btn" href="{{ row[field] }}" target="_blank" rel="noopener">Open</a>
-                      {% else %}
-                      <span class="muted">No link</span>
-                      {% endif %}
-                      {% elif card.section.key == "bom" and field == "status" %}
-                      {% set status_text = row[field] or "" %}
-                      {% set status_key = status_text|lower|replace(" ", "")|replace("-", "") %}
-                      <span class="bom-status {% if status_key in ['purchased', 'purchase', 'bought'] %}purchased{% elif status_key in ['nonpurchased', 'notpurchased', 'notyetpurchased', 'unpurchased', 'notbought'] %}not-purchased{% else %}neutral{% endif %}">
-                        {{ status_text }}
-                      </span>
-                      {% elif card.section.key == "system_status" and field == "is_online" %}
-                      {% if row[field] in [1, "1", True, "true", "True"] %}
-                      <span class="status-pill status-online">Online</span>
-                      {% else %}
-                      <span class="status-pill status-offline">Offline</span>
-                      {% endif %}
-                      {% elif card.section.key == "risks" and field == "status" %}
-                      {% set status_text = row[field] or "" %}
-                      {% set status_key = status_text|lower|replace(" ", "")|replace("-", "") %}
-                      <span class="risk-status {% if status_key in ['ongoing', 'inprogress'] %}risk-ongoing{% elif status_key == 'resolved' %}risk-resolved{% else %}risk-neutral{% endif %}">
-                        {{ status_text }}
-                      </span>
-                      {% else %}
-                      {{ row[field] or "" }}
-                      {% endif %}
-                    </td>
-                    {% endif %}
-                    {% endfor %}
-                    {% if card.section.key == "documentation" %}
-                    <td>
-                      {% if row.location %}
-                      <a class="btn" href="{{ row.location }}" target="_blank" rel="noopener">Open</a>
-                      {% else %}
-                      <span class="muted">No link</span>
-                      {% endif %}
-                    </td>
-                    {% endif %}
-                    {% if card.section.key != "system_status" %}
-                    <td>
-                      <a href="{{ url_for('edit_item', entity=card.section.key, item_id=row['id']) }}">Edit</a>
-                      <form class="inline" method="post" action="{{ url_for('delete_item', entity=card.section.key, item_id=row['id']) }}">
-                        <button class="btn btn-danger" type="submit">Delete</button>
-                      </form>
-                    </td>
-                    {% endif %}
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-            {% else %}
-            <div class="muted">No entries yet.</div>
-            {% endif %}
-          </div>
-          {% endif %}
-        </section>
-        {% endfor %}
-      </div>
-    </main>
-    <div class="modal" id="riskModal" aria-hidden="true">
-      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="riskModalTitle">
-        <div class="modal-head">
-          <h3 class="modal-title" id="riskModalTitle">Risk details</h3>
-          <button class="modal-close" type="button" id="riskModalClose">Close</button>
-        </div>
-        <div class="modal-section">
-          <div class="modal-label">Risk</div>
-          <div class="modal-body" id="riskModalRisk"></div>
-        </div>
-        <div class="modal-section">
-          <div class="modal-label">Impact</div>
-          <div class="modal-body" id="riskModalImpact"></div>
-        </div>
-        <div class="modal-section">
-          <div class="modal-label">Solution</div>
-          <div class="modal-body" id="riskModalSolution"></div>
-        </div>
-        <div class="modal-section">
-          <div class="modal-label">Status</div>
-          <div class="modal-body" id="riskModalStatus"></div>
-        </div>
-      </div>
-    </div>
-    <script>
-      const cardList = document.getElementById("cardList");
-
-      document.querySelectorAll("#cardList .section-head").forEach((header) => {
-        header.addEventListener("dblclick", () => {
-          const card = header.closest("section.card");
-          if (card) {
-            card.classList.toggle("collapsed");
-          }
-        });
-      });
-
-      function saveOrder() {
-        const order = Array.from(cardList.querySelectorAll("section.card")).map((card) => card.dataset.key);
-        fetch("{{ url_for('update_card_order') }}", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ order }),
-        });
-      }
-
-      cardList.querySelectorAll("section.card").forEach((card) => {
-        card.addEventListener("dragstart", (event) => {
-          if (event.target.closest("button, a, input, textarea, select, form")) {
-            event.preventDefault();
-            return;
-          }
-          card.classList.add("dragging");
-          event.dataTransfer.effectAllowed = "move";
-        });
-
-        card.addEventListener("dragend", () => {
-          card.classList.remove("dragging");
-          saveOrder();
-        });
-
-        card.addEventListener("dragover", (event) => {
-          event.preventDefault();
-          const dragging = cardList.querySelector(".dragging");
-          if (!dragging || dragging === card) {
-            return;
-          }
-          const rect = card.getBoundingClientRect();
-          const next = event.clientY - rect.top > rect.height / 2;
-          cardList.insertBefore(dragging, next ? card.nextSibling : card);
-        });
-      });
-
-      const riskModal = document.getElementById("riskModal");
-      const riskModalClose = document.getElementById("riskModalClose");
-      const riskModalRisk = document.getElementById("riskModalRisk");
-      const riskModalImpact = document.getElementById("riskModalImpact");
-      const riskModalSolution = document.getElementById("riskModalSolution");
-      const riskModalStatus = document.getElementById("riskModalStatus");
-
-      function openRiskModal(row) {
-        if (!riskModal) {
-          return;
-        }
-        riskModalRisk.textContent = row.dataset.risk || "";
-        riskModalImpact.textContent = row.dataset.impact || "";
-        riskModalSolution.textContent = row.dataset.solution || "";
-        riskModalStatus.textContent = row.dataset.status || "";
-        riskModal.classList.add("open");
-        riskModal.setAttribute("aria-hidden", "false");
-      }
-
-      function closeRiskModal() {
-        if (!riskModal) {
-          return;
-        }
-        riskModal.classList.remove("open");
-        riskModal.setAttribute("aria-hidden", "true");
-      }
-
-      document.querySelectorAll(".risk-row").forEach((row) => {
-        row.addEventListener("dblclick", () => openRiskModal(row));
-      });
-
-      if (riskModalClose) {
-        riskModalClose.addEventListener("click", closeRiskModal);
-      }
-
-      if (riskModal) {
-        riskModal.addEventListener("click", (event) => {
-          if (event.target === riskModal) {
-            closeRiskModal();
-          }
-        });
-      }
-
-      document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") {
-          closeRiskModal();
-        }
-      });
-    </script>
-  </body>
-</html>
-"""
-
-PROGRESS_FORM_TEMPLATE = """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ title }}</title>
-    <style>
-      :root {
-        --bg: #f5f2ec;
-        --ink: #1f2a2e;
-        --muted: #5c6b73;
-        --card: #ffffff;
-        --border: #e3ddd1;
-        --accent: #2c6e63;
-        --shadow: 0 18px 40px rgba(32, 41, 40, 0.12);
-      }
-
-      * { box-sizing: border-box; }
-
-      body {
-        margin: 0;
-        font-family: "Avenir Next", "Optima", "Gill Sans", "Trebuchet MS", sans-serif;
-        color: var(--ink);
-        background: radial-gradient(circle at top left, #ffffff 0%, var(--bg) 55%);
-      }
-
-      h1 {
-        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
-        margin: 0 0 16px;
-      }
-
-      .page {
-        max-width: 720px;
-        margin: 0 auto;
-        padding: 32px 20px 60px;
-      }
-
-      .card {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        padding: 20px;
-        box-shadow: var(--shadow);
-      }
-
-      form { display: grid; gap: 16px; }
-      label { font-weight: 600; display: block; margin-bottom: 6px; }
-      input, textarea, select {
-        width: 100%;
-        padding: 12px 14px;
-        border: 1px solid #cfc7b7;
-        border-radius: 10px;
-        font-size: 14px;
-        background: #fffdf9;
-      }
-      select {
-        font-size: 15px;
-        border-radius: 12px;
-        border-color: #c2b9a8;
-        background-color: #fffaf1;
-        color: var(--ink);
-        appearance: none;
-        background-image:
-          linear-gradient(45deg, transparent 50%, #6e6a5f 50%),
-          linear-gradient(135deg, #6e6a5f 50%, transparent 50%),
-          linear-gradient(to right, #e3ddd1, #e3ddd1);
-        background-position:
-          calc(100% - 20px) 50%,
-          calc(100% - 14px) 50%,
-          calc(100% - 36px) 50%;
-        background-size: 7px 7px, 7px 7px, 1px 60%;
-        background-repeat: no-repeat;
-        padding-right: 48px;
-        box-shadow: 0 6px 14px rgba(32, 41, 40, 0.08);
-      }
-      .toggle-row {
-        display: grid;
-        gap: 10px;
-        width: 100%;
-      }
-      .status-toggle {
-        display: grid;
-        grid-template-columns: 1fr;
-        row-gap: 50px;
-        width: 100%;
-        min-height: 52px;
-      }
-      .status-btn {
-        width: 100%;
-        border: 1px solid var(--border);
-        background: #f1ede3;
-        color: var(--muted);
-        padding: 14px 22px;
-        border-radius: 999px;
-        font-size: 14px;
-        cursor: pointer;
-        text-align: center;
-        min-height: 46px;
-        appearance: none;
-        -webkit-appearance: none;
-        box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.04);
-      }
-      .status-btn.active {
-        background: #e1efe9;
-        border-color: #b9d9ce;
-        color: var(--accent);
-        font-weight: 600;
-      }
-      .status-btn.online.active {
-        background: #dff6e6;
-        border-color: #a9e2bb;
-        color: #1f6b46;
-      }
-      .status-btn.offline.active {
-        background: #ffe5e5;
-        border-color: #f0b1b1;
-        color: #8b2f2f;
-      }
-      .offline-only { display: none; }
-      textarea { min-height: 120px; }
-      .range-row {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        align-items: center;
-        gap: 12px;
-      }
-      .range-value {
-        min-width: 64px;
-        text-align: right;
-        font-weight: 600;
-      }
-      .phase-track {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 6px;
-        margin-top: 6px;
-      }
-      .phase-step {
-        text-align: center;
-        font-size: 11px;
-        padding: 6px 4px;
-        border-radius: 999px;
-        background: #f1ede3;
-        color: var(--muted);
-        border: 1px solid var(--border);
-        cursor: pointer;
-        appearance: none;
-      }
-      .phase-step.active {
-        background: #e1efe9;
-        color: var(--accent);
-        border-color: #b9d9ce;
-        font-weight: 600;
-      }
-      .toggle-row {
-        display: grid;
-        gap: 10px;
-        width: 100%;
-      }
-      .status-toggle {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-        width: 100%;
-        min-height: 52px;
-      }
-      .status-btn {
-        width: 100%;
-        border: 1px solid var(--border);
-        background: #f1ede3;
-        color: var(--muted);
-        padding: 14px 22px;
-        border-radius: 999px;
-        font-size: 14px;
-        cursor: pointer;
-        text-align: center;
-        min-height: 46px;
-        appearance: none;
-        -webkit-appearance: none;
-        box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.04);
-      }
-      .status-btn.active {
-        background: #e1efe9;
-        border-color: #b9d9ce;
-        color: var(--accent);
-        font-weight: 600;
-      }
-      .status-btn.online.active {
-        background: #dff6e6;
-        border-color: #a9e2bb;
-        color: #1f6b46;
-      }
-      .status-btn.offline.active {
-        background: #ffe5e5;
-        border-color: #f0b1b1;
-        color: #8b2f2f;
-      }
-      .offline-only { display: none; }
-      .actions { display: flex; gap: 8px; }
-      .btn {
-        border: 1px solid var(--border);
-        background: #f7f4ee;
-        padding: 8px 12px;
-        border-radius: 10px;
-        cursor: pointer;
-        text-decoration: none;
-        color: var(--ink);
-        font-size: 14px;
-      }
-      .btn.primary { background: linear-gradient(120deg, var(--accent), #3f8b7e); color: #fff; border: none; }
-    </style>
-  </head>
-  <body data-entity="{{ entity or '' }}">
-    <main class="page">
-      <div class="card">
-        <h1>{{ title }}</h1>
-        <form method="post">
-          <div>
-            <label>Phase</label>
-            <input type="hidden" id="phase" name="phase" value="{{ values.phase }}" />
-            <input type="hidden" id="percent" name="percent" value="{{ values.percent or 0 }}" />
-            <div class="phase-track">
-              {% for phase in phases %}
-              <button
-                type="button"
-                class="phase-step {% if values.phase == phase %}active{% endif %}"
-                data-phase="{{ phase }}"
-                data-percent="{{ phase_map[phase] }}"
-              >
-                {{ phase }}
-              </button>
-              {% endfor %}
-            </div>
-            <div class="range-row" style="margin-top: 10px;">
-              <div class="muted">Progress</div>
-              <div class="range-value" id="percentValue">{{ values.percent or 0 }}%</div>
-            </div>
-          </div>
-          <div class="log-head">
-            <div>
-              <div class="progress-title">Development log</div>
-              <div class="muted">Add or review daily updates.</div>
-            </div>
-            <div class="actions">
-              <a class="btn" href="{{ url_for('new_item', entity='development_log') }}">Add log</a>
-              <a class="btn" href="{{ url_for('index') }}#development-log">View logs</a>
-            </div>
-          </div>
-          <div class="actions">
-            <button class="btn primary" type="submit">Save</button>
-            <a class="btn" href="{{ url_for('index') }}">Cancel</a>
-          </div>
-        </form>
-      </div>
-    </main>
-    <script>
-      const phaseMap = {{ phase_map | tojson }};
-      const phaseInput = document.getElementById("phase");
-      const percentInput = document.getElementById("percent");
-      const percentValue = document.getElementById("percentValue");
-      const phaseButtons = document.querySelectorAll(".phase-step");
-
-      function updatePercentLabel() {
-        percentValue.textContent = `${percentInput.value}%`;
-      }
-
-      function setActivePhase(phase) {
-        phaseInput.value = phase;
-        phaseButtons.forEach((step) => {
-          step.classList.toggle("active", step.dataset.phase === phase);
-        });
-      }
-
-      function nearestPhase(value) {
-        let nearest = "";
-        let distance = Infinity;
-        Object.entries(phaseMap).forEach(([phase, percent]) => {
-          const diff = Math.abs(value - percent);
-          if (diff < distance) {
-            distance = diff;
-            nearest = phase;
-          }
-        });
-        return nearest;
-      }
-
-      function syncPhaseFromPercent() {
-        const percent = parseInt(percentInput.value, 10);
-        const phase = nearestPhase(percent);
-        if (phase) {
-          setActivePhase(phase);
-        }
-      }
-
-      phaseButtons.forEach((button) => {
-        button.addEventListener("click", () => {
-          const selected = button.dataset.phase;
-          const percent = button.dataset.percent;
-          if (phaseMap[selected] !== undefined) {
-            percentInput.value = percent;
-            updatePercentLabel();
-            setActivePhase(selected);
-          }
-        });
-      });
-
-      updatePercentLabel();
-      if (!phaseInput.value) {
-        syncPhaseFromPercent();
-      } else {
-        setActivePhase(phaseInput.value);
-      }
-    </script>
-  </body>
-</html>
-"""
-
-FORM_TEMPLATE = """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ title }}</title>
-    <style>
-      :root {
-        --bg: #f5f2ec;
-        --ink: #1f2a2e;
-        --muted: #5c6b73;
-        --card: #ffffff;
-        --border: #e3ddd1;
-        --accent: #2c6e63;
-        --shadow: 0 18px 40px rgba(32, 41, 40, 0.12);
-      }
-
-      * { box-sizing: border-box; }
-
-      body {
-        margin: 0;
-        font-family: "Avenir Next", "Optima", "Gill Sans", "Trebuchet MS", sans-serif;
-        color: var(--ink);
-        background: radial-gradient(circle at top left, #ffffff 0%, var(--bg) 55%);
-      }
-
-      h1 {
-        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
-        margin: 0 0 16px;
-      }
-
-      .page {
-        max-width: 720px;
-        margin: 0 auto;
-        padding: 32px 20px 60px;
-      }
-
-      .card {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        padding: 20px;
-        box-shadow: var(--shadow);
-      }
-
-      form { display: grid; gap: 14px; }
-      label { font-weight: 600; }
-      input, textarea {
-        width: 100%;
-        padding: 10px;
-        border: 1px solid #cfc7b7;
-        border-radius: 8px;
-        font-size: 14px;
-        background: #fffdf9;
-      }
-      textarea { min-height: 120px; }
-      .toggle-row {
-        display: grid;
-        gap: 10px;
-        width: 100%;
-      }
-      .status-toggle {
-        display: grid;
-        gap: 12px;
-        width: 100%;
-      }
-      .choice-toggle {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-        gap: 10px;
-        width: 100%;
-      }
-      .choice-btn {
-        border: 1px solid var(--border);
-        background: #f1ede3;
-        color: var(--muted);
-        padding: 12px 14px;
-        border-radius: 999px;
-        font-size: 14px;
-        cursor: pointer;
-        text-align: center;
-        min-height: 44px;
-        appearance: none;
-        -webkit-appearance: none;
-        box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.04);
-      }
-      .choice-btn.active {
-        background: #e1efe9;
-        border-color: #b9d9ce;
-        color: var(--accent);
-        font-weight: 600;
-      }
-      .choice-btn.priority-high.active {
-        background: #ffe5e5;
-        border-color: #f0b1b1;
-        color: #8b2f2f;
-      }
-      .choice-btn.priority-medium.active {
-        background: #fff0d9;
-        border-color: #f1caa0;
-        color: #8a5a12;
-      }
-      .choice-btn.priority-low.active {
-        background: #e9f6ef;
-        border-color: #b7dec7;
-        color: #1f6b46;
-      }
-      .choice-btn.status-not-started.active {
-        background: #fff0d9;
-        border-color: #f1caa0;
-        color: #8a5a12;
-      }
-      .choice-btn.status-progress.active {
-        background: #e7f0ff;
-        border-color: #b9cdee;
-        color: #2b4b7a;
-      }
-      .choice-btn.status-done.active {
-        background: #e9f6ef;
-        border-color: #b7dec7;
-        color: #1f6b46;
-      }
-      .choice-btn.risk-ongoing.active {
-        background: #ffe5e5;
-        border-color: #f0b1b1;
-        color: #8b2f2f;
-      }
-      .choice-btn.risk-resolved.active {
-        background: #e9f6ef;
-        border-color: #b7dec7;
-        color: #1f6b46;
-      }
-      .choice-btn.bom-purchased.active {
-        background: #e6f0ff;
-        border-color: #bcd3ff;
-        color: #2b4d8b;
-      }
-      .choice-btn.bom-not-yet.active {
-        background: #ffe5e5;
-        border-color: #f0b1b1;
-        color: #8b2f2f;
-      }
-      .actions { display: flex; gap: 8px; }
-      .btn {
-        border: 1px solid var(--border);
-        background: #f7f4ee;
-        padding: 8px 12px;
-        border-radius: 10px;
-        cursor: pointer;
-        text-decoration: none;
-        color: var(--ink);
-        font-size: 14px;
-      }
-      .btn.primary { background: linear-gradient(120deg, var(--accent), #3f8b7e); color: #fff; border: none; }
-      a { color: #1b4b7a; text-decoration: none; }
-      a:hover { text-decoration: underline; }
-    </style>
-  </head>
-  <body>
-    <main class="page">
-      <div class="card">
-        <h1>{{ title }}</h1>
-        <form method="post">
-          {% set online = values.get('is_online') in ['1', 1, True, 'true', 'True'] %}
-          {% for field in fields %}
-          <div
-            class="field-block {% if entity == 'system_status' and field.name in ['reason', 'estimated_downtime'] %}offline-only{% endif %}"
-            {% if entity == 'system_status' and field.name in ['reason', 'estimated_downtime'] %}
-            style="display: {{ 'none' if online else 'block' }};"
-            {% endif %}
-          >
-            <label for="{{ field.name }}">{{ field.label }}</label>
-            {% if field.widget == 'textarea' %}
-            <textarea id="{{ field.name }}" name="{{ field.name }}">{{ values.get(field.name, "") }}</textarea>
-            {% elif entity == "system_status" and field.name == "is_online" %}
-            <div class="toggle-row">
-              <input id="is_online" name="is_online" type="hidden" value="{{ 1 if online else 0 }}" />
-              <div class="status-toggle" role="group" aria-label="System status">
-                <button
-                  type="button"
-                  class="status-btn online {% if online %}active{% endif %}"
-                  data-value="1"
-                  style="width:100%; padding:14px 22px; min-height:46px; border-radius:999px; border:1px solid {{ '#a9e2bb' if online else 'var(--border)' }}; background: {{ '#dff6e6' if online else '#f1ede3' }}; color: {{ '#1f6b46' if online else 'var(--muted)' }};"
-                  onclick="setSystemStatus('1')"
-                >
-                  Online
-                </button>
-                <button
-                  type="button"
-                  class="status-btn offline {% if not online %}active{% endif %}"
-                  data-value="0"
-                  style="width:100%; padding:14px 22px; min-height:46px; border-radius:999px; border:1px solid {{ '#f0b1b1' if not online else 'var(--border)' }}; background: {{ '#ffe5e5' if not online else '#f1ede3' }}; color: {{ '#8b2f2f' if not online else 'var(--muted)' }};"
-                  onclick="setSystemStatus('0')"
-                >
-                  Offline
-                </button>
-              </div>
-            </div>
-            {% elif entity == "tasks" and field.name in ["priority", "status"] %}
-            {% set current_value = values.get(field.name, "") or "" %}
-            {% if field.name == "priority" %}
-            {% set options = ["High", "Medium", "Low"] %}
-            {% else %}
-            {% set options = ["Not started", "In progress", "Done"] %}
-            {% endif %}
-            <div class="toggle-row">
-              <input id="{{ field.name }}" name="{{ field.name }}" type="hidden" value="{{ current_value }}" />
-              <div class="choice-toggle" data-target="{{ field.name }}" role="group" aria-label="{{ field.label }}">
-                {% for option in options %}
-                <button
-                  type="button"
-                  class="choice-btn{% if field.name == 'priority' %} priority-{{ option|lower }}{% endif %}{% if current_value|lower == option|lower %} active{% endif %}"
-                  data-value="{{ option }}"
-                >
-                  {{ option }}
-                </button>
-                {% endfor %}
-              </div>
-            </div>
-            {% elif entity == "bom" and field.name == "status" %}
-            {% set current_value = values.get(field.name, "") or "" %}
-            {% set status_key = current_value|lower|replace(" ", "")|replace("-", "") %}
-            {% if status_key in ["purchased", "purchase", "bought"] %}
-            {% set current_value = "Purchased" %}
-            {% elif status_key in ["notyetpurchased", "notpurchased", "nonpurchased", "unpurchased", "notbought"] %}
-            {% set current_value = "Not yet purchased" %}
-            {% endif %}
-            {% set options = ["Not yet purchased", "Purchased"] %}
-            <div class="toggle-row">
-              <input id="{{ field.name }}" name="{{ field.name }}" type="hidden" value="{{ current_value }}" />
-              <div class="choice-toggle" data-target="{{ field.name }}" role="group" aria-label="{{ field.label }}">
-                {% for option in options %}
-                {% if option == "Purchased" %}
-                {% set status_class = "bom-purchased" %}
-                {% else %}
-                {% set status_class = "bom-not-yet" %}
-                {% endif %}
-                <button
-                  type="button"
-                  class="choice-btn {{ status_class }}{% if current_value|lower == option|lower %} active{% endif %}"
-                  data-value="{{ option }}"
-                >
-                  {{ option }}
-                </button>
-                {% endfor %}
-              </div>
-            </div>
-            {% elif entity == "risks" and field.name == "status" %}
-            {% set current_value = values.get(field.name, "") or "" %}
-            {% set options = ["Ongoing", "Resolved"] %}
-            <div class="toggle-row">
-              <input id="{{ field.name }}" name="{{ field.name }}" type="hidden" value="{{ current_value }}" />
-              <div class="choice-toggle" data-target="{{ field.name }}" role="group" aria-label="{{ field.label }}">
-                {% for option in options %}
-                <button
-                  type="button"
-                  class="choice-btn risk-{{ option|lower }}{% if current_value|lower == option|lower %} active{% endif %}"
-                  data-value="{{ option }}"
-                >
-                  {{ option }}
-                </button>
-                {% endfor %}
-              </div>
-            </div>
-            {% elif entity == "documentation" and field.name == "status" %}
-            {% set current_value = values.get(field.name, "") or "" %}
-            {% set options = ["Not started", "In progress", "Done"] %}
-            <div class="toggle-row">
-              <input id="{{ field.name }}" name="{{ field.name }}" type="hidden" value="{{ current_value }}" />
-              <div class="choice-toggle" data-target="{{ field.name }}" role="group" aria-label="{{ field.label }}">
-                {% for option in options %}
-                {% if option == "Not started" %}
-                {% set status_class = "status-not-started" %}
-                {% elif option == "In progress" %}
-                {% set status_class = "status-progress" %}
-                {% else %}
-                {% set status_class = "status-done" %}
-                {% endif %}
-                <button
-                  type="button"
-                  class="choice-btn {{ status_class }}{% if current_value|lower == option|lower %} active{% endif %}"
-                  data-value="{{ option }}"
-                >
-                  {{ option }}
-                </button>
-                {% endfor %}
-              </div>
-            </div>
-            {% else %}
-            <input
-              id="{{ field.name }}"
-              name="{{ field.name }}"
-              type="{{ field.input_type or 'text' }}"
-              value="{{ values.get(field.name, "") }}"
-              {% if field.step %}step="{{ field.step }}"{% endif %}
-            />
-            {% endif %}
-            {% if entity == "documentation" and field.name == "location" %}
-            <span class="link-pill" id="onedrivePill">Paste OneDrive link</span>
-            {% endif %}
-          </div>
-          {% endfor %}
-          <div class="actions">
-            <button class="btn primary" type="submit">Save</button>
-            <a class="btn" href="{{ url_for('index') }}">Cancel</a>
-          </div>
-        </form>
-      </div>
-    </main>
-    <script>
-      const entity = document.body.dataset.entity;
-      if (entity === "documentation") {
-        const input = document.querySelector("input[name='location']");
-        if (input) {
-          const pill = document.getElementById("onedrivePill") || document.createElement("span");
-          if (!pill.id) {
-            pill.id = "onedrivePill";
-            pill.className = "link-pill";
-            pill.textContent = "Paste OneDrive link";
-            input.parentElement.appendChild(pill);
-          }
-
-          function isOneDriveUrl(url) {
-            try {
-              const parsed = new URL(url);
-              return (
-                parsed.hostname.includes("1drv.ms") ||
-                parsed.hostname.includes("onedrive.live.com") ||
-                parsed.hostname.includes("sharepoint.com")
-              );
-            } catch {
-              return false;
-            }
-          }
-
-          function update() {
-            const value = input.value.trim();
-            if (!value) {
-              pill.className = "link-pill";
-              pill.textContent = "Paste OneDrive link";
-              return;
-            }
-            if (isOneDriveUrl(value)) {
-              pill.className = "link-pill valid";
-              pill.textContent = "OneDrive link";
-            } else {
-              pill.className = "link-pill invalid";
-              pill.textContent = "Not OneDrive";
-            }
-          }
-
-          input.addEventListener("input", update);
-          update();
-        }
-      }
-
-      function initChoiceToggles() {
-        document.querySelectorAll(".choice-toggle").forEach((toggle) => {
-          const target = toggle.dataset.target;
-          const hidden = document.getElementById(target);
-          const buttons = toggle.querySelectorAll(".choice-btn");
-          if (!buttons.length) {
-            return;
-          }
-
-          const setValue = (value) => {
-            if (hidden) {
-              hidden.value = value;
-            }
-            buttons.forEach((btn) => {
-              btn.classList.toggle("active", btn.dataset.value === value);
-            });
-          };
-
-          buttons.forEach((btn) => {
-            btn.addEventListener("click", () => setValue(btn.dataset.value));
-          });
-
-          if (hidden && hidden.value) {
-            setValue(hidden.value);
-          } else {
-            setValue(buttons[0].dataset.value);
-          }
-        });
-      }
-
-      initChoiceToggles();
-
-      function setSystemStatus(value) {
-        const hidden = document.getElementById("is_online");
-        const offlineOnly = document.querySelectorAll(".offline-only");
-        const buttons = document.querySelectorAll(".status-btn");
-        const online = value === "1";
-
-        if (hidden) {
-          hidden.value = online ? "1" : "0";
-        }
-
-        buttons.forEach((btn) => {
-          btn.classList.toggle("active", btn.dataset.value === (online ? "1" : "0"));
-          if (btn.dataset.value === "1") {
-            btn.style.borderColor = online ? "#a9e2bb" : "var(--border)";
-            btn.style.background = online ? "#dff6e6" : "#f1ede3";
-            btn.style.color = online ? "#1f6b46" : "var(--muted)";
-          } else {
-            btn.style.borderColor = online ? "var(--border)" : "#f0b1b1";
-            btn.style.background = online ? "#f1ede3" : "#ffe5e5";
-            btn.style.color = online ? "var(--muted)" : "#8b2f2f";
-          }
-        });
-
-        offlineOnly.forEach((block) => {
-          block.style.display = online ? "none" : "block";
-        });
-      }
-
-      if (entity === "system_status") {
-        const hidden = document.getElementById("is_online");
-        if (hidden) {
-          setSystemStatus(hidden.value === "1" ? "1" : "0");
-        }
-      }
-    </script>
-  </body>
-</html>
-"""
 
 
 def ensure_column(db: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
@@ -1803,21 +246,21 @@ def close_db(exc: Exception | None) -> None:
         db.close()
 
 
-def fetch_project() -> Dict[str, str]:
+def fetch_project() -> Dict[str, Any]:
     row = get_db().execute("SELECT * FROM project WHERE id = 1").fetchone()
     if row is None:
         return {"name": "", "phase": ""}
     return dict(row)
 
 
-def fetch_development_progress() -> Dict[str, object]:
+def fetch_development_progress() -> Dict[str, Any]:
     row = get_db().execute("SELECT * FROM development_progress WHERE id = 1").fetchone()
     if row is None:
         return {"percent": None, "phase": "", "status_text": ""}
     return dict(row)
 
 
-def fetch_all(entity: str) -> List[Dict[str, object]]:
+def fetch_all(entity: str) -> List[Dict[str, Any]]:
     if entity == "development_log":
         query = "SELECT * FROM development_log ORDER BY log_date DESC, id DESC"
         rows = get_db().execute(query).fetchall()
@@ -1826,33 +269,23 @@ def fetch_all(entity: str) -> List[Dict[str, object]]:
     return [dict(row) for row in rows]
 
 
-def entity_or_404(entity: str) -> Dict[str, object]:
+def entity_or_404(entity: str) -> Dict[str, Any]:
     if entity not in ENTITY_DEFS or entity == "project":
         abort(404)
     return ENTITY_DEFS[entity]
 
 
-def collect_form_data(fields: List[Dict[str, object]]) -> Dict[str, object]:
-    data: Dict[str, object] = {}
-    for field in fields:
-        name = field["name"]
-        if name == "is_online":
-            data[name] = 1 if request.form.get(name) in {"1", "true", "True", "on"} else 0
-        else:
-            data[name] = request.form.get(name, "").strip()
-    return data
-
-
-def empty_values(fields: List[Dict[str, object]]) -> Dict[str, str]:
+def empty_values(fields: List[Dict[str, Any]]) -> Dict[str, str]:
     return {field["name"]: "" for field in fields}
 
 
-def default_values_for(entity: str, fields: List[Dict[str, object]]) -> Dict[str, str]:
+def default_values_for(entity: str, fields: List[Dict[str, Any]]) -> Dict[str, str]:
     values = empty_values(fields)
     if entity == "development_log":
         values["log_date"] = datetime.now().strftime("%Y-%m-%d")
     if entity == "tasks":
         values["priority"] = "Medium"
+        values["status"] = "Not started"
     if entity == "documentation":
         values["status"] = "Not started"
     if entity == "bom":
@@ -1864,7 +297,7 @@ def default_values_for(entity: str, fields: List[Dict[str, object]]) -> Dict[str
     return values
 
 
-def parse_percent(value: object) -> float | None:
+def parse_percent(value: Any) -> float | None:
     try:
         percent = float(value)
     except (TypeError, ValueError):
@@ -1872,7 +305,7 @@ def parse_percent(value: object) -> float | None:
     return max(0.0, min(100.0, percent))
 
 
-def parse_date(value: object) -> datetime | None:
+def parse_date(value: Any) -> datetime | None:
     if not value:
         return None
     text = str(value).strip()
@@ -1884,25 +317,25 @@ def parse_date(value: object) -> datetime | None:
     return None
 
 
-def priority_class(value: object) -> str:
+def priority_class(value: Any) -> str:
     text = str(value or "").strip().lower()
     if text == "high":
-        return "priority-high"
+        return "pill-danger"
     if text == "low":
-        return "priority-low"
-    return "priority-medium"
+        return "pill-success"
+    return "pill-warning"
 
 
-def task_status_class(value: object) -> str:
+def task_status_class(value: Any) -> str:
     text = str(value or "").strip().lower()
     if text in {"done", "complete", "completed"}:
-        return "status-done"
+        return "pill-success"
     if text in {"in progress", "in-progress", "inprogress"}:
-        return "status-progress"
-    return "status-not-started"
+        return "pill-info"
+    return "pill-muted"
 
 
-def normalize_phase(value: object) -> str:
+def normalize_phase(value: Any) -> str:
     if not value:
         return ""
     text = str(value).strip().lower()
@@ -1919,7 +352,7 @@ def phase_from_percent(percent: float | None) -> str:
     return nearest[0]
 
 
-def build_development_view() -> Dict[str, object]:
+def build_development_view() -> Dict[str, Any]:
     row = fetch_development_progress()
     phase = normalize_phase(row.get("phase"))
     if not phase:
@@ -1940,14 +373,14 @@ def build_development_view() -> Dict[str, object]:
     }
 
 
-def build_tasks_view() -> Dict[str, object]:
+def build_tasks_view() -> Dict[str, Any]:
     today = datetime.now().date()
     week_start = today - timedelta(days=today.weekday())
     days = [week_start + timedelta(days=offset) for offset in range(7)]
     day_map = {day: [] for day in days}
 
     tasks = fetch_all("tasks")
-    bars: List[Dict[str, object]] = []
+    bars: List[Dict[str, Any]] = []
     for task in tasks:
         due = parse_date(task.get("due_date"))
         due_date = due.date() if due else None
@@ -1963,7 +396,7 @@ def build_tasks_view() -> Dict[str, object]:
         if due_date in day_map:
             day_map[due_date].append(task_view)
 
-    def sort_key(item: Dict[str, object]) -> tuple:
+    def sort_key(item: Dict[str, Any]) -> tuple:
         priority = str(item.get("priority") or "").lower()
         priority_rank = {"high": 0, "medium": 1, "low": 2}.get(priority, 1)
         due = parse_date(item.get("due_date")) or datetime.max
@@ -2007,23 +440,8 @@ def ordered_card_keys() -> List[str]:
     return pinned + unpinned
 
 
-def build_cards(sections: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    state = fetch_card_state()
-    sections_map = {section["key"]: section for section in sections}
-    cards: List[Dict[str, object]] = []
-    for key in ordered_card_keys():
-        pinned = bool(state.get(key, {}).get("pinned"))
-        if key == "development_progress":
-            cards.append({"key": key, "type": "progress", "pinned": pinned})
-        elif key == "tasks":
-            cards.append({"key": key, "type": "tasks", "pinned": pinned})
-        elif key in sections_map:
-            cards.append({"key": key, "type": "section", "section": sections_map[key], "pinned": pinned})
-    return cards
-
-
-def build_sections() -> List[Dict[str, object]]:
-    sections: List[Dict[str, object]] = []
+def build_sections() -> List[Dict[str, Any]]:
+    sections: List[Dict[str, Any]] = []
     for key, definition in ENTITY_DEFS.items():
         if key in {"project", "development_log", "tasks"}:
             continue
@@ -2044,142 +462,107 @@ def build_sections() -> List[Dict[str, object]]:
     return sections
 
 
-@app.route("/")
-def index() -> str:
-    project = fetch_project()
-    sections = build_sections()
-    return render_template_string(
-        HOME_TEMPLATE,
-        project=project,
-        development=build_development_view(),
-        phases=PHASES,
-        logs=fetch_all("development_log"),
-        tasks=build_tasks_view(),
-        cards=build_cards(sections),
-        sections=sections,
-        updated=datetime.now().strftime("%Y-%m-%d %H:%M"),
-    )
+def normalize_status_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "").replace("-", "")
 
 
-@app.route("/project/edit", methods=["GET", "POST"])
-def edit_project() -> str:
-    definition = ENTITY_DEFS["project"]
-    project = fetch_project()
-    if request.method == "POST":
-        data = collect_form_data(definition["fields"])
-        get_db().execute(
-            "UPDATE project SET name = ? WHERE id = 1",
-            (data["name"],),
-        )
-        get_db().commit()
-        return redirect(url_for("index"))
-    return render_template_string(
-        FORM_TEMPLATE,
-        title="Edit Project",
-        fields=definition["fields"],
-        values=project,
-        entity="project",
-    )
+def bom_status_class(value: Any) -> str:
+    key = normalize_status_key(value)
+    if key in {"purchased", "purchase", "bought"}:
+        return "pill-info"
+    if key in {"nonpurchased", "notpurchased", "notyetpurchased", "unpurchased", "notbought"}:
+        return "pill-danger"
+    return "pill-muted"
 
 
-@app.route("/progress/edit", methods=["GET", "POST"])
-def edit_progress() -> str:
-    progress = fetch_development_progress()
-    phase_value = normalize_phase(progress.get("phase"))
-    percent_value = progress.get("percent")
-    if percent_value is None and phase_value in PHASE_TO_PERCENT:
-        percent_value = PHASE_TO_PERCENT[phase_value]
-    if percent_value is not None and not phase_value:
-        phase_value = phase_from_percent(percent_value)
-    values = {
-        "percent": 0 if percent_value is None else percent_value,
-        "phase": phase_value,
+def risk_status_class(value: Any) -> str:
+    key = normalize_status_key(value)
+    if key in {"ongoing", "inprogress"}:
+        return "pill-danger"
+    if key == "resolved":
+        return "pill-success"
+    return "pill-muted"
+
+
+def load_dashboard_data() -> Dict[str, Any]:
+    return {
+        "project": fetch_project(),
+        "development": build_development_view(),
+        "progress_row": fetch_development_progress(),
+        "logs": fetch_all("development_log"),
+        "tasks": build_tasks_view(),
+        "sections": build_sections(),
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
-    if request.method == "POST":
-        percent = parse_percent(request.form.get("percent"))
-        phase = normalize_phase(request.form.get("phase"))
-        if percent is None and phase in PHASE_TO_PERCENT:
-            percent = PHASE_TO_PERCENT[phase]
-        if percent is not None and not phase:
-            phase = phase_from_percent(percent)
-        percent_value = int(round(percent)) if percent is not None else None
-        get_db().execute(
-            "INSERT OR IGNORE INTO development_progress (id, percent, phase, status_text) VALUES (1, NULL, '', '')"
-        )
-        get_db().execute(
-            "UPDATE development_progress SET percent = ?, phase = ?, status_text = ? WHERE id = 1",
-            (percent_value, phase, ""),
-        )
-        if phase:
-            get_db().execute("UPDATE project SET phase = ? WHERE id = 1", (phase,))
-        get_db().commit()
-        return redirect(url_for("index"))
-    return render_template_string(
-        PROGRESS_FORM_TEMPLATE,
-        title="Edit Development Progress",
-        values=values,
-        phases=PHASES,
-        phase_map=PHASE_TO_PERCENT,
+
+
+def sanitize_payload(entity: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    definition = ENTITY_DEFS[entity]
+    data: Dict[str, Any] = {}
+    for field in definition["fields"]:
+        name = field["name"]
+        value = payload.get(name, "")
+        if name == "is_online":
+            data[name] = 1 if str(value).lower() in {"1", "true", "yes", "on"} else 0
+        else:
+            data[name] = "" if value is None else str(value).strip()
+    return data
+
+
+def insert_entity(entity: str, payload: Dict[str, Any]) -> None:
+    data = sanitize_payload(entity, payload)
+    if entity == "documentation":
+        data["last_updated"] = datetime.now().strftime("%Y-%m-%d")
+    columns = ", ".join(data.keys())
+    placeholders = ", ".join("?" for _ in data)
+    get_db().execute(
+        f"INSERT INTO {entity} ({columns}) VALUES ({placeholders})",
+        list(data.values()),
     )
+    get_db().commit()
 
 
-@app.route("/new/<entity>", methods=["GET", "POST"])
-def new_item(entity: str) -> str:
-    definition = entity_or_404(entity)
-    if request.method == "POST":
-        data = collect_form_data(definition["fields"])
-        if entity == "documentation":
-            data["last_updated"] = datetime.now().strftime("%Y-%m-%d")
-        columns = ", ".join(data.keys())
-        placeholders = ", ".join("?" for _ in data)
-        get_db().execute(
-            f"INSERT INTO {entity} ({columns}) VALUES ({placeholders})",
-            list(data.values()),
-        )
-        get_db().commit()
-        return redirect(url_for("index"))
-    return render_template_string(
-        FORM_TEMPLATE,
-        title=f"Add {definition['label']} item",
-        fields=definition["fields"],
-        values=default_values_for(entity, definition["fields"]),
-        entity=entity,
+def update_entity(entity: str, item_id: int, payload: Dict[str, Any]) -> None:
+    data = sanitize_payload(entity, payload)
+    if entity == "documentation":
+        data["last_updated"] = datetime.now().strftime("%Y-%m-%d")
+    assignments = ", ".join(f"{key} = ?" for key in data)
+    get_db().execute(
+        f"UPDATE {entity} SET {assignments} WHERE id = ?",
+        list(data.values()) + [item_id],
     )
+    get_db().commit()
 
 
-@app.route("/edit/<entity>/<int:item_id>", methods=["GET", "POST"])
-def edit_item(entity: str, item_id: int) -> str:
-    definition = entity_or_404(entity)
-    row = get_db().execute(f"SELECT * FROM {entity} WHERE id = ?", (item_id,)).fetchone()
-    if row is None:
-        abort(404)
-    values = dict(row)
-    if request.method == "POST":
-        data = collect_form_data(definition["fields"])
-        if entity == "documentation":
-            data["last_updated"] = datetime.now().strftime("%Y-%m-%d")
-        assignments = ", ".join(f"{key} = ?" for key in data)
-        get_db().execute(
-            f"UPDATE {entity} SET {assignments} WHERE id = ?",
-            list(data.values()) + [item_id],
-        )
-        get_db().commit()
-        return redirect(url_for("index"))
-    return render_template_string(
-        FORM_TEMPLATE,
-        title=f"Edit {definition['label']} item",
-        fields=definition["fields"],
-        values=values,
-        entity=entity,
-    )
-
-
-@app.route("/delete/<entity>/<int:item_id>", methods=["POST"])
-def delete_item(entity: str, item_id: int):
-    entity_or_404(entity)
+def delete_entity(entity: str, item_id: int) -> None:
     get_db().execute(f"DELETE FROM {entity} WHERE id = ?", (item_id,))
     get_db().commit()
-    return redirect(url_for("index"))
+
+
+def update_project(payload: Dict[str, Any]) -> None:
+    data = sanitize_payload("project", payload)
+    get_db().execute("UPDATE project SET name = ? WHERE id = 1", (data.get("name", ""),))
+    get_db().commit()
+
+
+def update_progress(payload: Dict[str, Any]) -> None:
+    percent = parse_percent(payload.get("percent"))
+    phase = normalize_phase(payload.get("phase"))
+    if percent is None and phase in PHASE_TO_PERCENT:
+        percent = PHASE_TO_PERCENT[phase]
+    if percent is not None and not phase:
+        phase = phase_from_percent(percent)
+    percent_value = int(round(percent)) if percent is not None else None
+    get_db().execute(
+        "INSERT OR IGNORE INTO development_progress (id, percent, phase, status_text) VALUES (1, NULL, '', '')"
+    )
+    get_db().execute(
+        "UPDATE development_progress SET percent = ?, phase = ?, status_text = ? WHERE id = 1",
+        (percent_value, phase, ""),
+    )
+    if phase:
+        get_db().execute("UPDATE project SET phase = ? WHERE id = 1", (phase,))
+    get_db().commit()
 
 
 @app.route("/api/data")
@@ -2199,45 +582,1162 @@ def api_data():
     )
 
 
-@app.route("/api/cards/order", methods=["POST"])
-def update_card_order():
+@app.route("/api/project", methods=["GET", "PUT"])
+def api_project():
+    if request.method == "GET":
+        return jsonify(fetch_project())
     payload = request.get_json(silent=True) or {}
-    order = payload.get("order") or []
-    if not isinstance(order, list):
-        abort(400)
-    for position, key in enumerate(order):
-        if key not in CARD_KEYS:
-            continue
-        get_db().execute(
-            "INSERT OR IGNORE INTO card_state (key, position, pinned) VALUES (?, ?, 0)",
-            (key, position),
-        )
-        get_db().execute(
-            "UPDATE card_state SET position = ? WHERE key = ?",
-            (position, key),
-        )
-    get_db().commit()
+    update_project(payload)
     return jsonify({"ok": True})
 
 
-@app.route("/api/cards/pin", methods=["POST"])
-def update_card_pin():
+@app.route("/api/development_progress", methods=["GET", "PUT"])
+def api_progress():
+    if request.method == "GET":
+        return jsonify(fetch_development_progress())
     payload = request.get_json(silent=True) or {}
-    key = payload.get("key")
-    pinned = payload.get("pinned")
-    if key not in CARD_KEYS:
-        abort(400)
-    value = 1 if pinned else 0
-    get_db().execute(
-        "INSERT OR IGNORE INTO card_state (key, position, pinned) VALUES (?, 0, ?)",
-        (key, value),
-    )
-    get_db().execute(
-        "UPDATE card_state SET pinned = ? WHERE key = ?",
-        (value, key),
-    )
-    get_db().commit()
+    update_progress(payload)
     return jsonify({"ok": True})
+
+
+@app.route("/api/<entity>", methods=["GET", "POST"])
+def api_entity_collection(entity: str):
+    entity_or_404(entity)
+    if request.method == "GET":
+        return jsonify(fetch_all(entity))
+    payload = request.get_json(silent=True) or {}
+    insert_entity(entity, payload)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/<entity>/<int:item_id>", methods=["PUT", "DELETE"])
+def api_entity_item(entity: str, item_id: int):
+    entity_or_404(entity)
+    if request.method == "DELETE":
+        delete_entity(entity, item_id)
+        return jsonify({"ok": True})
+    payload = request.get_json(silent=True) or {}
+    update_entity(entity, item_id, payload)
+    return jsonify({"ok": True})
+
+
+GLASS_CSS = """
+:root {
+  color-scheme: light;
+  --bg: #eaf2ff;
+  --bg-2: #86c9ff;
+  --bg-3: #356eff;
+  --bg-4: #f2f6ff;
+  --glass: rgba(255, 255, 255, 0.58);
+  --glass-2: rgba(255, 255, 255, 0.32);
+  --border: rgba(255, 255, 255, 0.5);
+  --text: #0b1220;
+  --muted: #56627a;
+  --shadow: 0 24px 60px rgba(10, 20, 45, 0.22);
+  --shadow-soft: 0 12px 30px rgba(10, 20, 45, 0.14);
+  --blur: 26px;
+  --radius: 22px;
+  --accent: #0a84ff;
+  --accent-2: #6bd7ff;
+  --accent-3: #ff7ad9;
+  --glow-1: rgba(255, 255, 255, 0.9);
+  --glow-2: rgba(110, 200, 255, 0.5);
+  --glow-3: rgba(255, 120, 215, 0.4);
+  --vignette: rgba(10, 16, 30, 0.25);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0b1022;
+    --bg-2: #111f3d;
+    --bg-3: #1b2f61;
+    --bg-4: #0b142b;
+    --glass: rgba(12, 18, 34, 0.62);
+    --glass-2: rgba(12, 18, 34, 0.42);
+    --border: rgba(255, 255, 255, 0.14);
+    --text: #ecf2ff;
+    --muted: #a7b6d3;
+    --shadow: 0 26px 70px rgba(0, 0, 0, 0.45);
+    --shadow-soft: 0 12px 32px rgba(0, 0, 0, 0.3);
+    --blur: 30px;
+    --accent: #6bb7ff;
+    --accent-2: #7ee1ff;
+    --accent-3: #ff8bde;
+    --glow-1: rgba(120, 160, 255, 0.35);
+    --glow-2: rgba(80, 150, 255, 0.4);
+    --glow-3: rgba(255, 130, 220, 0.3);
+    --vignette: rgba(0, 0, 0, 0.5);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Segoe UI", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(1200px 700px at 10% -10%, var(--glow-1), transparent 60%),
+    radial-gradient(900px 700px at 110% 0%, var(--glow-3), transparent 65%),
+    radial-gradient(800px 600px at -10% 60%, var(--glow-2), transparent 70%),
+    radial-gradient(120% 120% at 50% 30%, rgba(255, 255, 255, 0.18), var(--vignette) 70%),
+    linear-gradient(155deg, var(--bg-2) 0%, var(--bg-3) 55%, var(--bg-4) 100%);
+  min-height: 100vh;
+  overflow-x: hidden;
+  position: relative;
+  isolation: isolate;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20% -10% auto -10%;
+  height: 70vh;
+  background:
+    radial-gradient(600px 320px at 15% 15%, rgba(255, 255, 255, 0.6), transparent 70%),
+    radial-gradient(700px 340px at 70% 0%, rgba(255, 255, 255, 0.35), transparent 72%);
+  filter: blur(44px) saturate(160%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
+  opacity: 0.07;
+  mix-blend-mode: soft-light;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 32px 24px 88px;
+  display: grid;
+  gap: 24px;
+  position: relative;
+  z-index: 1;
+}
+
+.glass-surface {
+  background: linear-gradient(135deg, var(--glass), var(--glass-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow:
+    var(--shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(var(--surface-blur, var(--blur))) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--surface-blur, var(--blur))) saturate(180%);
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0));
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.glass-surface::after {
+  content: "";
+  position: absolute;
+  inset: auto -20% -45% -20%;
+  height: 70%;
+  background:
+    radial-gradient(320px 220px at 15% 20%, rgba(10, 132, 255, 0.35), transparent 70%),
+    radial-gradient(320px 220px at 85% 80%, rgba(255, 122, 217, 0.32), transparent 70%);
+  opacity: 0.55;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.glass-surface > * { position: relative; z-index: 1; }
+
+.glass-card { --surface-blur: calc(var(--blur) + 6px); }
+.glass-panel { --surface-blur: calc(var(--blur) - 4px); }
+
+.card {
+  padding: 24px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.navbar {
+  max-width: 1120px;
+  margin: 20px auto 0;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  position: sticky;
+  top: 16px;
+  z-index: 10;
+}
+
+.glass-navbar { --surface-blur: calc(var(--blur) + 10px); }
+
+.nav-left {
+  display: grid;
+  gap: 2px;
+}
+
+.nav-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.nav-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.nav-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nav-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+h1, h2 {
+  margin: 0 0 8px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+h1 { font-size: 32px; }
+
+h2 { font-size: 20px; margin-bottom: 4px; }
+
+.meta { color: var(--muted); font-size: 14px; }
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.glass-btn,
+.btn {
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.35));
+  padding: 10px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  box-shadow:
+    var(--shadow-soft),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.glass-btn::before,
+.btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 55%),
+    radial-gradient(80px 40px at 20% 0%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0));
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.btn.primary {
+  background: linear-gradient(160deg, var(--accent-2), var(--accent) 55%, #0a4bd6 100%);
+  color: #fff;
+  border: 1px solid rgba(10, 120, 255, 0.55);
+  box-shadow:
+    0 18px 44px rgba(10, 130, 255, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.btn.secondary {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.3));
+  color: var(--text);
+}
+
+.btn.primary::before { opacity: 0.35; }
+
+.btn.ghost {
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: none;
+}
+
+.btn:focus-visible,
+.seg-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.2);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.55));
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.pill-success { background: rgba(68, 201, 140, 0.18); color: #0f5132; border-color: rgba(68, 201, 140, 0.5); }
+.pill-warning { background: rgba(255, 176, 86, 0.2); color: #7a4b0b; border-color: rgba(255, 176, 86, 0.5); }
+.pill-danger { background: rgba(255, 99, 99, 0.2); color: #7a1010; border-color: rgba(255, 99, 99, 0.5); }
+.pill-info { background: rgba(86, 160, 255, 0.2); color: #133d7a; border-color: rgba(86, 160, 255, 0.5); }
+.pill-muted { background: rgba(15, 23, 42, 0.08); color: var(--muted); border-color: rgba(15, 23, 42, 0.12); }
+
+.progress-card {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  border-radius: 18px;
+}
+
+.progress-track {
+  height: 12px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.phase-track {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.phase-step {
+  text-align: center;
+  font-size: 11px;
+  padding: 6px 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--muted);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  font-family: inherit;
+  appearance: none;
+}
+
+.phase-step.active {
+  background: rgba(10, 132, 255, 0.15);
+  color: var(--accent);
+  border-color: rgba(10, 132, 255, 0.5);
+  font-weight: 600;
+}
+
+.list { display: grid; gap: 12px; }
+
+.log-entry,
+.task-row {
+  padding: 14px 16px;
+  border-radius: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.table-wrap {
+  border-radius: 16px;
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th, .table td {
+  text-align: left;
+  padding: 12px 12px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.table th {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.table tr:last-child td { border-bottom: none; }
+
+.link { color: var(--accent); text-decoration: none; font-weight: 600; }
+.link:hover { text-decoration: underline; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 16, 32, 0.45);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 40;
+}
+
+.modal-card {
+  width: min(720px, 95vw);
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-title { font-size: 20px; margin: 0; }
+
+.form { display: grid; gap: 14px; }
+
+.field { display: grid; gap: 6px; }
+
+.label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.helper { font-size: 12px; color: var(--muted); }
+
+.glass-input,
+.input, .textarea, .select {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.5));
+  font-size: 14px;
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input:focus, .textarea:focus, .select:focus {
+  outline: none;
+  border-color: rgba(10, 132, 255, 0.6);
+  box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.2);
+}
+
+.textarea { min-height: 120px; resize: vertical; }
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.seg-btn {
+  padding: 10px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.45));
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 600;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.seg-btn.active {
+  background: rgba(10, 132, 255, 0.18);
+  border-color: rgba(10, 132, 255, 0.5);
+  color: var(--accent);
+  box-shadow: var(--shadow-soft);
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .glass-surface,
+  .glass-btn,
+  .glass-input,
+  .glass-navbar {
+    background: rgba(255, 255, 255, 0.92);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .glass-surface,
+    .glass-btn,
+    .glass-input,
+    .glass-navbar {
+      background: rgba(12, 18, 34, 0.92);
+    }
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .card:hover,
+  .glass-panel:hover,
+  .glass-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 30px 70px rgba(10, 20, 45, 0.28);
+  }
+
+  .btn:hover,
+  .seg-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 18px 36px rgba(10, 20, 45, 0.22);
+  }
+}
+
+@media (max-width: 720px) {
+  h1 { font-size: 26px; }
+  .page { padding: 24px 16px 70px; }
+  .section-head { align-items: flex-start; }
+  .navbar { margin: 16px 16px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .card,
+  .glass-panel,
+  .glass-card,
+  .btn,
+  .seg-btn { transform: none !important; }
+}
+"""
+
+
+@component
+def App():
+    data, set_data = hooks.use_state(load_dashboard_data)
+    modal, set_modal = hooks.use_state({"open": False})
+    form_values, set_form_values = hooks.use_state({})
+
+    def refresh() -> None:
+        set_data(load_dashboard_data())
+
+    def close_modal(event: Dict[str, Any] | None = None) -> None:
+        set_modal({"open": False})
+
+    def set_field(name: str, value: Any) -> None:
+        set_form_values(lambda prev: {**prev, name: value})
+
+    def set_progress_phase(phase: str) -> None:
+        update_progress({"phase": phase})
+        refresh()
+
+    def open_project_modal() -> None:
+        fields = ENTITY_DEFS["project"]["fields"]
+        initial = {field["name"]: data["project"].get(field["name"], "") for field in fields}
+        set_form_values(initial)
+        set_modal({"open": True, "kind": "project", "title": "Edit Project"})
+
+    def open_progress_modal() -> None:
+        progress_row = data.get("progress_row", {})
+        initial = {
+            "phase": normalize_phase(progress_row.get("phase")) or "",
+            "percent": progress_row.get("percent") or 0,
+        }
+        set_form_values(initial)
+        set_modal({"open": True, "kind": "progress", "title": "Update Development Progress"})
+
+    def open_entity_modal(entity: str, mode: str, item: Dict[str, Any] | None = None) -> None:
+        fields = ENTITY_DEFS[entity]["fields"]
+        if mode == "new":
+            initial = default_values_for(entity, fields)
+        else:
+            item = item or {}
+            initial = {field["name"]: item.get(field["name"], "") for field in fields}
+        set_form_values(initial)
+        set_modal(
+            {
+                "open": True,
+                "kind": "entity",
+                "entity": entity,
+                "mode": mode,
+                "item_id": item.get("id") if item else None,
+                "title": ("Add " if mode == "new" else "Edit ") + ENTITY_DEFS[entity]["label"],
+            }
+        )
+
+    def handle_delete(entity: str, item_id: int) -> None:
+        delete_entity(entity, item_id)
+        refresh()
+
+    @event(prevent_default=True)
+    def handle_submit(event_data: Dict[str, Any]) -> None:
+        if not modal.get("open"):
+            return
+        kind = modal.get("kind")
+        if kind == "project":
+            update_project(form_values)
+        elif kind == "progress":
+            update_progress(form_values)
+        elif kind == "entity":
+            entity = str(modal.get("entity"))
+            if modal.get("mode") == "new":
+                insert_entity(entity, form_values)
+            else:
+                item_id = int(modal.get("item_id") or 0)
+                if item_id:
+                    update_entity(entity, item_id, form_values)
+        refresh()
+        close_modal()
+
+    def render_segmented(name: str, value: str, options: List[Dict[str, str]]):
+        return html.div(
+            {"class": "segmented"},
+            *[
+                html.button(
+                    {
+                        "type": "button",
+                        "class": f"seg-btn {'active' if value == option['value'] else ''}",
+                        "on_click": lambda event, val=option["value"]: set_field(name, val),
+                    },
+                    option["label"],
+                )
+                for option in options
+            ],
+        )
+
+    def render_field(entity: str, field: Dict[str, Any]):
+        name = field["name"]
+        label = field["label"]
+        value = form_values.get(name, "")
+        if entity == "system_status" and name == "is_online":
+            return html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, label),
+                render_segmented(
+                    name,
+                    str(value or "1"),
+                    [
+                        {"label": "Online", "value": "1"},
+                        {"label": "Offline", "value": "0"},
+                    ],
+                ),
+            )
+        if entity == "tasks" and name == "priority":
+            return html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, label),
+                render_segmented(
+                    name,
+                    str(value or "Medium"),
+                    [
+                        {"label": "High", "value": "High"},
+                        {"label": "Medium", "value": "Medium"},
+                        {"label": "Low", "value": "Low"},
+                    ],
+                ),
+            )
+        if entity == "tasks" and name == "status":
+            return html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, label),
+                render_segmented(
+                    name,
+                    str(value or "Not started"),
+                    [
+                        {"label": "Not started", "value": "Not started"},
+                        {"label": "In progress", "value": "In progress"},
+                        {"label": "Done", "value": "Done"},
+                    ],
+                ),
+            )
+        if entity == "documentation" and name == "status":
+            return html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, label),
+                render_segmented(
+                    name,
+                    str(value or "Not started"),
+                    [
+                        {"label": "Not started", "value": "Not started"},
+                        {"label": "In progress", "value": "In progress"},
+                        {"label": "Done", "value": "Done"},
+                    ],
+                ),
+            )
+        if entity == "risks" and name == "status":
+            return html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, label),
+                render_segmented(
+                    name,
+                    str(value or "Ongoing"),
+                    [
+                        {"label": "Ongoing", "value": "Ongoing"},
+                        {"label": "Resolved", "value": "Resolved"},
+                    ],
+                ),
+            )
+        if entity == "bom" and name == "status":
+            return html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, label),
+                render_segmented(
+                    name,
+                    str(value or "Not yet purchased"),
+                    [
+                        {"label": "Not yet purchased", "value": "Not yet purchased"},
+                        {"label": "Purchased", "value": "Purchased"},
+                    ],
+                ),
+            )
+        if field.get("widget") == "textarea":
+            return html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, label),
+                html.textarea(
+                    {
+                        "class": "textarea glass-input",
+                        "value": value,
+                        "on_change": lambda event: set_field(name, event["target"]["value"]),
+                    }
+                ),
+            )
+        attrs = {
+            "class": "input glass-input",
+            "type": field.get("input_type", "text"),
+            "value": value,
+            "on_change": lambda event: set_field(name, event["target"]["value"]),
+        }
+        if field.get("step"):
+            attrs["step"] = field["step"]
+        return html.div({"class": "field"}, html.span({"class": "label"}, label), html.input(attrs))
+
+    def render_progress_modal():
+        percent_value = form_values.get("percent", 0)
+        phase_value = form_values.get("phase", "")
+        return html.form(
+            {"class": "form", "on_submit": handle_submit},
+            html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, "Percent"),
+                html.input(
+                    {
+                        "class": "input glass-input",
+                        "type": "number",
+                        "min": 0,
+                        "max": 100,
+                        "value": percent_value,
+                        "on_change": lambda event: set_field("percent", event["target"]["value"]),
+                    }
+                ),
+                html.div({"class": "meta"}, "Use 0-100%"),
+            ),
+            html.div(
+                {"class": "field"},
+                html.span({"class": "label"}, "Phase"),
+                html.input(
+                    {
+                        "class": "input glass-input",
+                        "value": phase_value,
+                        "on_change": lambda event: set_field("phase", event["target"]["value"]),
+                    }
+                ),
+                html.div({"class": "meta"}, "Concept, Developing, Prototype, Testing, Complete"),
+            ),
+            html.div(
+                {"class": "form-actions"},
+                html.button({"type": "button", "class": "btn glass-btn ghost", "on_click": close_modal}, "Cancel"),
+                html.button({"type": "submit", "class": "btn glass-btn primary"}, "Save"),
+            ),
+        )
+
+    def render_entity_modal(entity: str):
+        fields = ENTITY_DEFS[entity]["fields"]
+        return html.form(
+            {"class": "form", "on_submit": handle_submit},
+            *[render_field(entity, field) for field in fields],
+            html.div(
+                {"class": "form-actions"},
+                html.button({"type": "button", "class": "btn glass-btn ghost", "on_click": close_modal}, "Cancel"),
+                html.button({"type": "submit", "class": "btn glass-btn primary"}, "Save"),
+            ),
+        )
+
+    def render_modal():
+        if not modal.get("open"):
+            return None
+        title = modal.get("title", "Edit")
+        if modal.get("kind") == "progress":
+            body = render_progress_modal()
+        elif modal.get("kind") == "project":
+            body = render_entity_modal("project")
+        else:
+            body = render_entity_modal(str(modal.get("entity")))
+        return html.div(
+            {"class": "modal"},
+            html.div(
+                {"class": "modal-card glass-surface glass-card"},
+                html.div(
+                    {"class": "modal-head"},
+                    html.h3({"class": "modal-title"}, title),
+                    html.button({"class": "btn glass-btn ghost", "type": "button", "on_click": close_modal}, "Close"),
+                ),
+                body,
+            ),
+        )
+
+    def render_cell(entity: str, field: str, row: Dict[str, Any]):
+        value = row.get(field, "")
+        if entity == "documentation" and field == "doc_type":
+            return html.span({"class": "tag"}, value or "")
+        if entity == "documentation" and field == "location":
+            if value:
+                return html.a({"class": "link", "href": value, "target": "_blank", "rel": "noopener"}, "Open")
+            return html.span({"class": "meta"}, "No link")
+        if entity == "bom" and field == "link":
+            if value:
+                return html.a({"class": "link", "href": value, "target": "_blank", "rel": "noopener"}, "Open")
+            return html.span({"class": "meta"}, "No link")
+        if entity == "bom" and field == "status":
+            return html.span({"class": f"pill {bom_status_class(value)}"}, value or "")
+        if entity == "system_status" and field == "is_online":
+            return html.span(
+                {"class": f"pill {'pill-success' if str(value) in ['1', 'true', 'True', 'on'] else 'pill-danger'}"},
+                "Online" if str(value) in ["1", "true", "True", "on"] else "Offline",
+            )
+        if entity == "risks" and field == "status":
+            return html.span({"class": f"pill {risk_status_class(value)}"}, value or "")
+        return value or ""
+
+    def render_section(section: Dict[str, Any]):
+        entity = section["key"]
+        rows = section["rows"]
+        fields = section["fields"]
+        labels = section["labels"]
+        actions = []
+        if entity == "system_status":
+            if rows:
+                actions.append(html.button({"class": "btn glass-btn", "on_click": lambda e, row=rows[0]: open_entity_modal(entity, "edit", row)}, "Edit"))
+            else:
+                actions.append(html.button({"class": "btn glass-btn", "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
+        else:
+            actions.append(html.button({"class": "btn glass-btn", "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
+        body = (
+            html.div(
+                {"class": "table-wrap glass-surface glass-panel"},
+                html.table(
+                    {"class": "table"},
+                    html.thead(
+                        html.tr(
+                            *[html.th(labels[field]) for field in fields],
+                            *([] if entity == "system_status" else [html.th("Actions")]),
+                        )
+                    ),
+                    html.tbody(
+                        *[
+                            html.tr(
+                                {"key": row.get("id", idx)},
+                                *[html.td(render_cell(entity, field, row)) for field in fields],
+                                *(
+                                    []
+                                    if entity == "system_status"
+                                    else [
+                                        html.td(
+                                            html.button(
+                                                {
+                                                    "class": "btn glass-btn ghost",
+                                                    "on_click": lambda e, row=row: open_entity_modal(entity, "edit", row),
+                                                },
+                                                "Edit",
+                                            ),
+                                            html.button(
+                                                {
+                                                    "class": "btn glass-btn ghost",
+                                                    "on_click": lambda e, row=row: handle_delete(entity, int(row["id"])),
+                                                },
+                                                "Delete",
+                                            ),
+                                        )
+                                    ]
+                                ),
+                            )
+                            for idx, row in enumerate(rows)
+                        ]
+                    ),
+                ),
+            )
+            if rows
+            else html.div({"class": "meta"}, "No entries yet.")
+        )
+
+        return html.section(
+            {"class": "card glass-surface glass-card"},
+            html.div(
+                {"class": "section-head"},
+                html.div(
+                    html.h2(section["title"]),
+                    html.div({"class": "meta"}, f"Manage {section['title'].lower()} entries."),
+                ),
+                html.div(actions),
+            ),
+            body,
+        )
+
+    development = data["development"]
+    tasks = data["tasks"]
+    logs = data["logs"]
+    progress_label = development.get("percent_label") or "0%"
+    phase_label = data["project"].get("phase") or "No phase"
+
+    return html.div(
+        html.style(GLASS_CSS),
+        html.header(
+            {"class": "navbar glass-surface glass-navbar"},
+            html.div(
+                {"class": "nav-left"},
+                html.div({"class": "nav-eyebrow"}, "Project hub"),
+                html.div({"class": "nav-title"}, data["project"].get("name") or "Project"),
+                html.div({"class": "nav-meta"}, f"Last updated {data['updated']}"),
+            ),
+            html.div(
+                {"class": "nav-actions"},
+                html.span({"class": "pill pill-info"}, f"Progress {progress_label}"),
+                html.span({"class": "pill pill-muted"}, phase_label),
+            ),
+        ),
+        html.main(
+            {"class": "page"},
+            html.section(
+                {"class": "card glass-surface glass-card hero"},
+                html.div(
+                    html.div({"class": "eyebrow"}, "Project hub"),
+                    html.h1(data["project"].get("name") or "Project"),
+                    html.div(
+                        {"class": "meta"},
+                        f"Phase: {data['project'].get('phase') or ''} · Last updated: {data['updated']}",
+                    ),
+                ),
+                html.div(
+                    html.button({"class": "btn glass-btn primary", "on_click": lambda e: open_project_modal()}, "Edit project"),
+                ),
+            ),
+            html.section(
+                {"class": "card glass-surface glass-card"},
+                html.div(
+                    {"class": "section-head"},
+                    html.div(
+                        html.h2("Development Progress"),
+                        html.div({"class": "meta"}, "Track overall phase and milestones."),
+                    ),
+                    html.div(
+                        html.button({"class": "btn glass-btn", "on_click": lambda e: open_progress_modal()}, "Edit progress"),
+                        html.button({"class": "btn glass-btn", "on_click": lambda e: open_entity_modal("development_log", "new")}, "Add log"),
+                    ),
+                ),
+                html.div(
+                    {"class": "progress-card glass-surface glass-panel"},
+                    html.div(
+                        html.div({"class": "meta"}, "Overall development"),
+                        html.div({"class": "meta"}, development.get("percent_label", "")),
+                    ),
+                    html.div(
+                        {"class": "progress-track"},
+                        html.span({"style": {"width": f"{development['percent_value']}%"}}),
+                    ),
+                    html.div(
+                        {"class": "phase-track"},
+                        *[
+                            html.button(
+                                {
+                                    "class": f"phase-step {'active' if phase == development.get('phase') else ''}",
+                                    "type": "button",
+                                    "on_click": lambda event, phase=phase: set_progress_phase(phase),
+                                },
+                                phase,
+                            )
+                            for phase in PHASES
+                        ],
+                    ),
+                ),
+                html.div(
+                    {"class": "section-head"},
+                    html.div(
+                        html.h2("Development Log"),
+                        html.div({"class": "meta"}, "Latest updates from the team."),
+                    ),
+                ),
+                html.div(
+                    {"class": "list"},
+                    *[
+                        html.div(
+                            {"class": "log-entry glass-surface glass-panel"},
+                            html.div({"class": "meta"}, log.get("log_date") or ""),
+                            html.div({"class": "meta"}, log.get("summary") or "Update"),
+                            html.div(log.get("details") or ""),
+                            html.div(
+                                {"class": "form-actions"},
+                                html.button(
+                                    {
+                                        "class": "btn glass-btn ghost",
+                                        "on_click": lambda e, log=log: open_entity_modal("development_log", "edit", log),
+                                    },
+                                    "Edit",
+                                ),
+                                html.button(
+                                    {
+                                        "class": "btn glass-btn ghost",
+                                        "on_click": lambda e, log=log: handle_delete("development_log", int(log["id"])),
+                                    },
+                                    "Delete",
+                                ),
+                            ),
+                        )
+                        for log in logs
+                    ]
+                    if logs
+                    else [html.div({"class": "meta"}, "No log entries yet.")],
+                ),
+            ),
+            html.section(
+                {"class": "card glass-surface glass-card"},
+                html.div(
+                    {"class": "section-head"},
+                    html.div(
+                        html.h2("Tasks"),
+                        html.div({"class": "meta"}, "Current priorities and due dates."),
+                    ),
+                    html.div(
+                        html.button({"class": "btn glass-btn", "on_click": lambda e: open_entity_modal("tasks", "new")}, "Add task"),
+                    ),
+                ),
+                html.div(
+                    {"class": "list"},
+                    *[
+                        html.div(
+                            {"class": "task-row glass-surface glass-panel"},
+                            html.div(
+                                html.div(task.get("task") or "Task"),
+                                html.div(
+                                    {"class": "task-meta"},
+                                    html.span({"class": f"pill {task.get('priority_class', '')}"}, task.get("priority") or ""),
+                                    html.span({"class": f"pill {task.get('status_class', '')}"}, task.get("status_text") or ""),
+                                    html.span({"class": "meta"}, f"Due {task.get('due_date') or 'TBD'}"),
+                                ),
+                            ),
+                            html.div(
+                                {"class": "task-meta"},
+                                html.button(
+                                    {
+                                        "class": "btn glass-btn ghost",
+                                        "on_click": lambda e, task=task: open_entity_modal("tasks", "edit", task),
+                                    },
+                                    "Edit",
+                                ),
+                                html.button(
+                                    {
+                                        "class": "btn glass-btn ghost",
+                                        "on_click": lambda e, task=task: handle_delete("tasks", int(task["id"])),
+                                    },
+                                    "Delete",
+                                ),
+                            ),
+                        )
+                        for task in tasks.get("bars", [])
+                    ]
+                    if tasks.get("bars")
+                    else [html.div({"class": "meta"}, "No tasks yet.")],
+                ),
+            ),
+            *[render_section(section) for section in data["sections"]],
+        ),
+        render_modal(),
+    )
+
+
+configure(
+    app,
+    App,
+    Options(
+        head=(
+            {"tagName": "title", "children": ["Project Hub"]},
+            {
+                "tagName": "meta",
+                "attributes": {"name": "viewport", "content": "width=device-width, initial-scale=1"},
+            },
+        )
+    ),
+)
 
 
 if __name__ == "__main__":
