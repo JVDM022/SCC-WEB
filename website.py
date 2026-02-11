@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import pkgutil
-import sqlite3
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
+
+from psycopg2 import pool
+from psycopg2.extras import RealDictCursor
 
 # Python 3.14: legacy AST node aliases removed. Werkzeug still expects them.
 if not hasattr(ast, "Str"):
@@ -52,7 +55,13 @@ from reactpy import component, event, hooks, html
 from reactpy.backend.flask import Options, configure
 
 app = Flask(__name__)
-DATABASE = "project.db"
+
+try:
+    DATABASE_URL = os.environ["DATABASE_URL"]
+except KeyError as exc:
+    raise RuntimeError("DATABASE_URL environment variable is required") from exc
+
+DB_POOL: pool.ThreadedConnectionPool | None = None
 
 PHASES = ["Concept", "Developing", "Prototype", "Testing", "Complete"]
 PHASE_TO_PERCENT = {
@@ -131,14 +140,20 @@ ENTITY_DEFS = {
 }
 
 
-def ensure_column(db: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
-    existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
-    if column not in existing:
-        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+def get_db_pool() -> pool.ThreadedConnectionPool:
+    global DB_POOL
+    if DB_POOL is None:
+        DB_POOL = pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
+    return DB_POOL
 
 
-def init_db(db: sqlite3.Connection) -> None:
-    db.executescript(
+def ensure_column(db, table: str, column: str, col_type: str) -> None:
+    with db.cursor() as cursor:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")
+
+
+def init_db(db) -> None:
+    schema_statements = [
         """
         CREATE TABLE IF NOT EXISTS project (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -146,9 +161,11 @@ def init_db(db: sqlite3.Connection) -> None:
             owner TEXT,
             phase TEXT,
             target_release TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS bom (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             item TEXT,
             part_number TEXT,
             qty INTEGER,
@@ -157,60 +174,80 @@ def init_db(db: sqlite3.Connection) -> None:
             lead_time_days INTEGER,
             status TEXT,
             link TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS documentation (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             title TEXT,
             doc_type TEXT,
             owner TEXT,
             location TEXT,
             status TEXT,
             last_updated TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS system_status (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             is_online INTEGER,
             reason TEXT,
             estimated_downtime TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS development_progress (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             percent INTEGER,
             phase TEXT,
             status_text TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS development_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             log_date TEXT,
             summary TEXT,
             details TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS card_state (
             key TEXT PRIMARY KEY,
             position INTEGER,
             pinned INTEGER
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             task TEXT,
             owner TEXT,
             due_date TEXT,
             priority TEXT,
             status TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS risks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             risk TEXT,
             impact TEXT,
             solution TEXT,
             owner TEXT,
             status TEXT
-        );
-        """
-    )
-    db.execute(
-        "INSERT OR IGNORE INTO project (id, name, owner, phase, target_release) VALUES (1, '', '', '', '')"
-    )
+        )
+        """,
+    ]
+
+    with db.cursor() as cursor:
+        for statement in schema_statements:
+            cursor.execute(statement)
+        cursor.execute(
+            "INSERT INTO project (id, name, owner, phase, target_release) VALUES (1, '', '', '', '') "
+            "ON CONFLICT (id) DO NOTHING"
+        )
+
     ensure_column(db, "development_progress", "percent", "INTEGER")
     ensure_column(db, "development_progress", "phase", "TEXT")
     ensure_column(db, "development_progress", "status_text", "TEXT")
@@ -219,23 +256,51 @@ def init_db(db: sqlite3.Connection) -> None:
     ensure_column(db, "tasks", "priority", "TEXT")
     ensure_column(db, "bom", "link", "TEXT")
     ensure_column(db, "risks", "solution", "TEXT")
-    db.execute(
-        "INSERT OR IGNORE INTO development_progress (id, percent, phase, status_text) VALUES (1, NULL, '', '')"
-    )
-    for position, key in enumerate(CARD_KEYS):
-        db.execute(
-            "INSERT OR IGNORE INTO card_state (key, position, pinned) VALUES (?, ?, 0)",
-            (key, position),
+
+    with db.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO development_progress (id, percent, phase, status_text) VALUES (1, NULL, '', '') "
+            "ON CONFLICT (id) DO NOTHING"
         )
+        for position, key in enumerate(CARD_KEYS):
+            cursor.execute(
+                "INSERT INTO card_state (key, position, pinned) VALUES (%s, %s, 0) "
+                "ON CONFLICT (key) DO NOTHING",
+                (key, position),
+            )
+
     db.commit()
 
 
-def get_db() -> sqlite3.Connection:
+def _to_postgres_placeholders(query: str) -> str:
+    return query.replace("?", "%s")
+
+
+def fetch_one(query: str, params: List[Any] | tuple[Any, ...] | None = None) -> Dict[str, Any] | None:
+    with get_db().cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(_to_postgres_placeholders(query), params)
+        row = cursor.fetchone()
+        return dict(row) if row is not None else None
+
+
+def fetch_all_rows(query: str, params: List[Any] | tuple[Any, ...] | None = None) -> List[Dict[str, Any]]:
+    with get_db().cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(_to_postgres_placeholders(query), params)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def execute_sql(query: str, params: List[Any] | tuple[Any, ...] | None = None) -> None:
+    with get_db().cursor() as cursor:
+        cursor.execute(_to_postgres_placeholders(query), params)
+
+
+def get_db():
     if "db" not in g:
-        db = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
-        init_db(db)
+        db = get_db_pool().getconn()
         g.db = db
+        if not app.config.get("DB_INITIALIZED", False):
+            init_db(db)
+            app.config["DB_INITIALIZED"] = True
     return g.db
 
 
@@ -243,30 +308,34 @@ def get_db() -> sqlite3.Connection:
 def close_db(exc: Exception | None) -> None:
     db = g.pop("db", None)
     if db is not None:
-        db.close()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        get_db_pool().putconn(db)
 
 
 def fetch_project() -> Dict[str, Any]:
-    row = get_db().execute("SELECT * FROM project WHERE id = 1").fetchone()
+    row = fetch_one("SELECT * FROM project WHERE id = 1")
     if row is None:
         return {"name": "", "phase": ""}
-    return dict(row)
+    return row
 
 
 def fetch_development_progress() -> Dict[str, Any]:
-    row = get_db().execute("SELECT * FROM development_progress WHERE id = 1").fetchone()
+    row = fetch_one("SELECT * FROM development_progress WHERE id = 1")
     if row is None:
         return {"percent": None, "phase": "", "status_text": ""}
-    return dict(row)
+    return row
 
 
 def fetch_all(entity: str) -> List[Dict[str, Any]]:
     if entity == "development_log":
         query = "SELECT * FROM development_log ORDER BY log_date DESC, id DESC"
-        rows = get_db().execute(query).fetchall()
+        rows = fetch_all_rows(query)
     else:
-        rows = get_db().execute(f"SELECT * FROM {entity} ORDER BY id DESC").fetchall()
-    return [dict(row) for row in rows]
+        rows = fetch_all_rows(f"SELECT * FROM {entity} ORDER BY id DESC")
+    return rows
 
 
 def entity_or_404(entity: str) -> Dict[str, Any]:
@@ -425,7 +494,7 @@ def build_tasks_view() -> Dict[str, Any]:
 
 
 def fetch_card_state() -> Dict[str, Dict[str, int]]:
-    rows = get_db().execute("SELECT key, position, pinned FROM card_state").fetchall()
+    rows = fetch_all_rows("SELECT key, position, pinned FROM card_state")
     return {row["key"]: {"position": row["position"], "pinned": row["pinned"]} for row in rows}
 
 
@@ -514,8 +583,8 @@ def insert_entity(entity: str, payload: Dict[str, Any]) -> None:
     if entity == "documentation":
         data["last_updated"] = datetime.now().strftime("%Y-%m-%d")
     columns = ", ".join(data.keys())
-    placeholders = ", ".join("?" for _ in data)
-    get_db().execute(
+    placeholders = ", ".join("%s" for _ in data)
+    execute_sql(
         f"INSERT INTO {entity} ({columns}) VALUES ({placeholders})",
         list(data.values()),
     )
@@ -526,22 +595,22 @@ def update_entity(entity: str, item_id: int, payload: Dict[str, Any]) -> None:
     data = sanitize_payload(entity, payload)
     if entity == "documentation":
         data["last_updated"] = datetime.now().strftime("%Y-%m-%d")
-    assignments = ", ".join(f"{key} = ?" for key in data)
-    get_db().execute(
-        f"UPDATE {entity} SET {assignments} WHERE id = ?",
+    assignments = ", ".join(f"{key} = %s" for key in data)
+    execute_sql(
+        f"UPDATE {entity} SET {assignments} WHERE id = %s",
         list(data.values()) + [item_id],
     )
     get_db().commit()
 
 
 def delete_entity(entity: str, item_id: int) -> None:
-    get_db().execute(f"DELETE FROM {entity} WHERE id = ?", (item_id,))
+    execute_sql(f"DELETE FROM {entity} WHERE id = %s", (item_id,))
     get_db().commit()
 
 
 def update_project(payload: Dict[str, Any]) -> None:
     data = sanitize_payload("project", payload)
-    get_db().execute("UPDATE project SET name = ? WHERE id = 1", (data.get("name", ""),))
+    execute_sql("UPDATE project SET name = %s WHERE id = 1", (data.get("name", ""),))
     get_db().commit()
 
 
@@ -553,15 +622,16 @@ def update_progress(payload: Dict[str, Any]) -> None:
     if percent is not None and not phase:
         phase = phase_from_percent(percent)
     percent_value = int(round(percent)) if percent is not None else None
-    get_db().execute(
-        "INSERT OR IGNORE INTO development_progress (id, percent, phase, status_text) VALUES (1, NULL, '', '')"
+    execute_sql(
+        "INSERT INTO development_progress (id, percent, phase, status_text) VALUES (1, NULL, '', '') "
+        "ON CONFLICT (id) DO NOTHING"
     )
-    get_db().execute(
-        "UPDATE development_progress SET percent = ?, phase = ?, status_text = ? WHERE id = 1",
+    execute_sql(
+        "UPDATE development_progress SET percent = %s, phase = %s, status_text = %s WHERE id = 1",
         (percent_value, phase, ""),
     )
     if phase:
-        get_db().execute("UPDATE project SET phase = ? WHERE id = 1", (phase,))
+        execute_sql("UPDATE project SET phase = %s WHERE id = 1", (phase,))
     get_db().commit()
 
 
@@ -580,6 +650,12 @@ def api_data():
             "last_updated": datetime.now().isoformat(timespec="minutes"),
         }
     )
+
+
+@app.route("/api/db-health")
+def api_db_health():
+    row = fetch_one("SELECT 1 AS ok")
+    return jsonify({"ok": bool(row and row.get("ok") == 1)})
 
 
 @app.route("/api/project", methods=["GET", "PUT"])
