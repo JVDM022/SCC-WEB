@@ -1282,6 +1282,7 @@ def App():
     form_values, set_form_values = hooks.use_state({})
     is_busy, set_is_busy = hooks.use_state(False)
     busy_ref = hooks.use_ref(False)
+    field_event_ts_ref = hooks.use_ref({})
 
     def refresh() -> None:
         set_data(load_dashboard_data())
@@ -1309,6 +1310,26 @@ def App():
             return
         set_form_values(lambda prev: {**prev, name: value})
 
+    def set_field_from_event(name: str, event: Dict[str, Any]) -> None:
+        if busy_ref.current:
+            return
+        ts_raw = event.get("timeStamp")
+        if ts_raw is None:
+            ts_raw = event.get("timestamp")
+        if ts_raw is not None:
+            try:
+                ts = float(ts_raw)
+            except (TypeError, ValueError):
+                ts = None
+            else:
+                last_ts = field_event_ts_ref.current.get(name, -1.0)
+                if ts <= last_ts:
+                    return
+                field_event_ts_ref.current[name] = ts
+        target = event.get("target", {})
+        value = target.get("value", "")
+        set_form_values(lambda prev: {**prev, name: value})
+
     def set_progress_phase(phase: str) -> None:
         if busy_ref.current or phase == data["development"].get("phase"):
             return
@@ -1317,6 +1338,7 @@ def App():
     def open_project_modal() -> None:
         if busy_ref.current:
             return
+        field_event_ts_ref.current = {}
         fields = ENTITY_DEFS["project"]["fields"]
         initial = {field["name"]: data["project"].get(field["name"], "") for field in fields}
         set_form_values(initial)
@@ -1325,6 +1347,7 @@ def App():
     def open_progress_modal() -> None:
         if busy_ref.current:
             return
+        field_event_ts_ref.current = {}
         progress_row = data.get("progress_row", {})
         initial = {
             "phase": normalize_phase(progress_row.get("phase")) or "",
@@ -1336,6 +1359,7 @@ def App():
     def open_entity_modal(entity: str, mode: str, item: Dict[str, Any] | None = None) -> None:
         if busy_ref.current:
             return
+        field_event_ts_ref.current = {}
         fields = ENTITY_DEFS[entity]["fields"]
         if mode == "new":
             initial = default_values_for(entity, fields)
@@ -1494,7 +1518,7 @@ def App():
                         "class": "textarea glass-input",
                         "value": value,
                         "disabled": is_busy,
-                        "on_change": lambda event: set_field(name, event["target"]["value"]),
+                        "on_change": lambda event: set_field_from_event(name, event),
                     }
                 ),
             )
@@ -1503,7 +1527,7 @@ def App():
             "type": field.get("input_type", "text"),
             "value": value,
             "disabled": is_busy,
-            "on_change": lambda event: set_field(name, event["target"]["value"]),
+            "on_change": lambda event: set_field_from_event(name, event),
         }
         if field.get("step"):
             attrs["step"] = field["step"]
@@ -1525,7 +1549,7 @@ def App():
                         "max": 100,
                         "value": percent_value,
                         "disabled": is_busy,
-                        "on_change": lambda event: set_field("percent", event["target"]["value"]),
+                        "on_change": lambda event: set_field_from_event("percent", event),
                     }
                 ),
                 html.div({"class": "meta"}, "Use 0-100%"),
@@ -1538,7 +1562,7 @@ def App():
                         "class": "input glass-input",
                         "value": phase_value,
                         "disabled": is_busy,
-                        "on_change": lambda event: set_field("phase", event["target"]["value"]),
+                        "on_change": lambda event: set_field_from_event("phase", event),
                     }
                 ),
                 html.div({"class": "meta"}, "Concept, Developing, Prototype, Testing, Complete"),
