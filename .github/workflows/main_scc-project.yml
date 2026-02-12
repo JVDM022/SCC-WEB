@@ -10,6 +10,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: scc-project-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -67,10 +71,24 @@ jobs:
         with:
           name: python-app
           path: .
-      
-      - name: 'Deploy to Azure Web App'
+
+      - name: Deploy to Azure Web App (attempt 1)
+        id: deploy-to-webapp-attempt-1
+        continue-on-error: true
         uses: azure/webapps-deploy@v3
-        id: deploy-to-webapp
+        with:
+          app-name: 'SCC-Project'
+          slot-name: 'Production'
+          package: release.zip
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_A6F54FE0451A4D0486C7C4A68BD7D71B }}
+
+      - name: Wait before retry after SCM restart
+        if: steps.deploy-to-webapp-attempt-1.outcome == 'failure'
+        run: sleep 45
+
+      - name: Deploy to Azure Web App (retry)
+        if: steps.deploy-to-webapp-attempt-1.outcome == 'failure'
+        uses: azure/webapps-deploy@v3
         with:
           app-name: 'SCC-Project'
           slot-name: 'Production'
