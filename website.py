@@ -5,7 +5,7 @@ import importlib.util
 import os
 import pkgutil
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
@@ -981,6 +981,22 @@ h2 { font-size: 20px; margin-bottom: 4px; }
   box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.2);
 }
 
+.btn[disabled],
+.glass-btn[disabled],
+.seg-btn[disabled] {
+  cursor: wait;
+  opacity: 0.6;
+  pointer-events: none;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.input[disabled],
+.textarea[disabled] {
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
 .tag {
   display: inline-flex;
   align-items: center;
@@ -1264,27 +1280,51 @@ def App():
     data, set_data = hooks.use_state(load_dashboard_data)
     modal, set_modal = hooks.use_state({"open": False})
     form_values, set_form_values = hooks.use_state({})
+    is_busy, set_is_busy = hooks.use_state(False)
+    busy_ref = hooks.use_ref(False)
 
     def refresh() -> None:
         set_data(load_dashboard_data())
 
+    def run_mutation(action: Callable[[], None], refresh_after: bool = True) -> None:
+        if busy_ref.current:
+            return
+        busy_ref.current = True
+        set_is_busy(True)
+        try:
+            action()
+            if refresh_after:
+                refresh()
+        finally:
+            busy_ref.current = False
+            set_is_busy(False)
+
     def close_modal(event: Dict[str, Any] | None = None) -> None:
+        if busy_ref.current:
+            return
         set_modal({"open": False})
 
     def set_field(name: str, value: Any) -> None:
+        if busy_ref.current:
+            return
         set_form_values(lambda prev: {**prev, name: value})
 
     def set_progress_phase(phase: str) -> None:
-        update_progress({"phase": phase})
-        refresh()
+        if busy_ref.current or phase == data["development"].get("phase"):
+            return
+        run_mutation(lambda: update_progress({"phase": phase}))
 
     def open_project_modal() -> None:
+        if busy_ref.current:
+            return
         fields = ENTITY_DEFS["project"]["fields"]
         initial = {field["name"]: data["project"].get(field["name"], "") for field in fields}
         set_form_values(initial)
         set_modal({"open": True, "kind": "project", "title": "Edit Project"})
 
     def open_progress_modal() -> None:
+        if busy_ref.current:
+            return
         progress_row = data.get("progress_row", {})
         initial = {
             "phase": normalize_phase(progress_row.get("phase")) or "",
@@ -1294,6 +1334,8 @@ def App():
         set_modal({"open": True, "kind": "progress", "title": "Update Development Progress"})
 
     def open_entity_modal(entity: str, mode: str, item: Dict[str, Any] | None = None) -> None:
+        if busy_ref.current:
+            return
         fields = ENTITY_DEFS[entity]["fields"]
         if mode == "new":
             initial = default_values_for(entity, fields)
@@ -1313,27 +1355,31 @@ def App():
         )
 
     def handle_delete(entity: str, item_id: int) -> None:
-        delete_entity(entity, item_id)
-        refresh()
+        if busy_ref.current:
+            return
+        run_mutation(lambda: delete_entity(entity, item_id))
 
     @event(prevent_default=True)
     def handle_submit(event_data: Dict[str, Any]) -> None:
-        if not modal.get("open"):
+        if not modal.get("open") or busy_ref.current:
             return
         kind = modal.get("kind")
-        if kind == "project":
-            update_project(form_values)
-        elif kind == "progress":
-            update_progress(form_values)
-        elif kind == "entity":
-            entity = str(modal.get("entity"))
-            if modal.get("mode") == "new":
-                insert_entity(entity, form_values)
-            else:
-                item_id = int(modal.get("item_id") or 0)
-                if item_id:
-                    update_entity(entity, item_id, form_values)
-        refresh()
+
+        def commit_form() -> None:
+            if kind == "project":
+                update_project(form_values)
+            elif kind == "progress":
+                update_progress(form_values)
+            elif kind == "entity":
+                entity = str(modal.get("entity"))
+                if modal.get("mode") == "new":
+                    insert_entity(entity, form_values)
+                else:
+                    item_id = int(modal.get("item_id") or 0)
+                    if item_id:
+                        update_entity(entity, item_id, form_values)
+
+        run_mutation(commit_form)
         close_modal()
 
     def render_segmented(name: str, value: str, options: List[Dict[str, str]]):
@@ -1342,8 +1388,10 @@ def App():
             *[
                 html.button(
                     {
+                        "key": option["value"],
                         "type": "button",
                         "class": f"seg-btn {'active' if value == option['value'] else ''}",
+                        "disabled": is_busy,
                         "on_click": lambda event, val=option["value"]: set_field(name, val),
                     },
                     option["label"],
@@ -1445,6 +1493,7 @@ def App():
                     {
                         "class": "textarea glass-input",
                         "value": value,
+                        "disabled": is_busy,
                         "on_change": lambda event: set_field(name, event["target"]["value"]),
                     }
                 ),
@@ -1453,6 +1502,7 @@ def App():
             "class": "input glass-input",
             "type": field.get("input_type", "text"),
             "value": value,
+            "disabled": is_busy,
             "on_change": lambda event: set_field(name, event["target"]["value"]),
         }
         if field.get("step"):
@@ -1474,6 +1524,7 @@ def App():
                         "min": 0,
                         "max": 100,
                         "value": percent_value,
+                        "disabled": is_busy,
                         "on_change": lambda event: set_field("percent", event["target"]["value"]),
                     }
                 ),
@@ -1486,6 +1537,7 @@ def App():
                     {
                         "class": "input glass-input",
                         "value": phase_value,
+                        "disabled": is_busy,
                         "on_change": lambda event: set_field("phase", event["target"]["value"]),
                     }
                 ),
@@ -1493,8 +1545,8 @@ def App():
             ),
             html.div(
                 {"class": "form-actions"},
-                html.button({"type": "button", "class": "btn glass-btn ghost", "on_click": close_modal}, "Cancel"),
-                html.button({"type": "submit", "class": "btn glass-btn primary"}, "Save"),
+                html.button({"type": "button", "class": "btn glass-btn ghost", "disabled": is_busy, "on_click": close_modal}, "Cancel"),
+                html.button({"type": "submit", "class": "btn glass-btn primary", "disabled": is_busy}, "Save"),
             ),
         )
 
@@ -1505,8 +1557,8 @@ def App():
             *[render_field(entity, field) for field in fields],
             html.div(
                 {"class": "form-actions"},
-                html.button({"type": "button", "class": "btn glass-btn ghost", "on_click": close_modal}, "Cancel"),
-                html.button({"type": "submit", "class": "btn glass-btn primary"}, "Save"),
+                html.button({"type": "button", "class": "btn glass-btn ghost", "disabled": is_busy, "on_click": close_modal}, "Cancel"),
+                html.button({"type": "submit", "class": "btn glass-btn primary", "disabled": is_busy}, "Save"),
             ),
         )
 
@@ -1527,7 +1579,7 @@ def App():
                 html.div(
                     {"class": "modal-head"},
                     html.h3({"class": "modal-title"}, title),
-                    html.button({"class": "btn glass-btn ghost", "type": "button", "on_click": close_modal}, "Close"),
+                    html.button({"class": "btn glass-btn ghost", "type": "button", "disabled": is_busy, "on_click": close_modal}, "Close"),
                 ),
                 body,
             ),
@@ -1564,11 +1616,16 @@ def App():
         actions = []
         if entity == "system_status":
             if rows:
-                actions.append(html.button({"class": "btn glass-btn", "on_click": lambda e, row=rows[0]: open_entity_modal(entity, "edit", row)}, "Edit"))
+                actions.append(
+                    html.button(
+                        {"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e, row=rows[0]: open_entity_modal(entity, "edit", row)},
+                        "Edit",
+                    )
+                )
             else:
-                actions.append(html.button({"class": "btn glass-btn", "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
+                actions.append(html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
         else:
-            actions.append(html.button({"class": "btn glass-btn", "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
+            actions.append(html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
         body = (
             html.div(
                 {"class": "table-wrap glass-surface glass-panel"},
@@ -1593,6 +1650,7 @@ def App():
                                             html.button(
                                                 {
                                                     "class": "btn glass-btn ghost",
+                                                    "disabled": is_busy,
                                                     "on_click": lambda e, row=row: open_entity_modal(entity, "edit", row),
                                                 },
                                                 "Edit",
@@ -1600,6 +1658,7 @@ def App():
                                             html.button(
                                                 {
                                                     "class": "btn glass-btn ghost",
+                                                    "disabled": is_busy,
                                                     "on_click": lambda e, row=row: handle_delete(entity, int(row["id"])),
                                                 },
                                                 "Delete",
@@ -1618,7 +1677,7 @@ def App():
         )
 
         return html.section(
-            {"class": "card glass-surface glass-card"},
+            {"class": "card glass-surface glass-card", "key": entity},
             html.div(
                 {"class": "section-head"},
                 html.div(
@@ -1650,6 +1709,7 @@ def App():
                 {"class": "nav-actions"},
                 html.span({"class": "pill pill-info"}, f"Progress {progress_label}"),
                 html.span({"class": "pill pill-muted"}, phase_label),
+                *([html.span({"class": "pill pill-warning"}, "Syncing...")] if is_busy else []),
             ),
         ),
         html.main(
@@ -1665,7 +1725,7 @@ def App():
                     ),
                 ),
                 html.div(
-                    html.button({"class": "btn glass-btn primary", "on_click": lambda e: open_project_modal()}, "Edit project"),
+                    html.button({"class": "btn glass-btn primary", "disabled": is_busy, "on_click": lambda e: open_project_modal()}, "Edit project"),
                 ),
             ),
             html.section(
@@ -1677,8 +1737,8 @@ def App():
                         html.div({"class": "meta"}, "Track overall phase and milestones."),
                     ),
                     html.div(
-                        html.button({"class": "btn glass-btn", "on_click": lambda e: open_progress_modal()}, "Edit progress"),
-                        html.button({"class": "btn glass-btn", "on_click": lambda e: open_entity_modal("development_log", "new")}, "Add log"),
+                        html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_progress_modal()}, "Edit progress"),
+                        html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal("development_log", "new")}, "Add log"),
                     ),
                 ),
                 html.div(
@@ -1698,6 +1758,7 @@ def App():
                                 {
                                     "class": f"phase-step {'active' if phase == development.get('phase') else ''}",
                                     "type": "button",
+                                    "disabled": is_busy,
                                     "on_click": lambda event, phase=phase: set_progress_phase(phase),
                                 },
                                 phase,
@@ -1717,7 +1778,7 @@ def App():
                     {"class": "list"},
                     *[
                         html.div(
-                            {"class": "log-entry glass-surface glass-panel"},
+                            {"class": "log-entry glass-surface glass-panel", "key": log.get("id", idx)},
                             html.div({"class": "meta"}, log.get("log_date") or ""),
                             html.div({"class": "meta"}, log.get("summary") or "Update"),
                             html.div(log.get("details") or ""),
@@ -1726,6 +1787,7 @@ def App():
                                 html.button(
                                     {
                                         "class": "btn glass-btn ghost",
+                                        "disabled": is_busy,
                                         "on_click": lambda e, log=log: open_entity_modal("development_log", "edit", log),
                                     },
                                     "Edit",
@@ -1733,13 +1795,14 @@ def App():
                                 html.button(
                                     {
                                         "class": "btn glass-btn ghost",
+                                        "disabled": is_busy,
                                         "on_click": lambda e, log=log: handle_delete("development_log", int(log["id"])),
                                     },
                                     "Delete",
                                 ),
                             ),
                         )
-                        for log in logs
+                        for idx, log in enumerate(logs)
                     ]
                     if logs
                     else [html.div({"class": "meta"}, "No log entries yet.")],
@@ -1754,14 +1817,14 @@ def App():
                         html.div({"class": "meta"}, "Current priorities and due dates."),
                     ),
                     html.div(
-                        html.button({"class": "btn glass-btn", "on_click": lambda e: open_entity_modal("tasks", "new")}, "Add task"),
+                        html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal("tasks", "new")}, "Add task"),
                     ),
                 ),
                 html.div(
                     {"class": "list"},
                     *[
                         html.div(
-                            {"class": "task-row glass-surface glass-panel"},
+                            {"class": "task-row glass-surface glass-panel", "key": task.get("id", idx)},
                             html.div(
                                 html.div(task.get("task") or "Task"),
                                 html.div(
@@ -1776,6 +1839,7 @@ def App():
                                 html.button(
                                     {
                                         "class": "btn glass-btn ghost",
+                                        "disabled": is_busy,
                                         "on_click": lambda e, task=task: open_entity_modal("tasks", "edit", task),
                                     },
                                     "Edit",
@@ -1783,13 +1847,14 @@ def App():
                                 html.button(
                                     {
                                         "class": "btn glass-btn ghost",
+                                        "disabled": is_busy,
                                         "on_click": lambda e, task=task: handle_delete("tasks", int(task["id"])),
                                     },
                                     "Delete",
                                 ),
                             ),
                         )
-                        for task in tasks.get("bars", [])
+                        for idx, task in enumerate(tasks.get("bars", []))
                     ]
                     if tasks.get("bars")
                     else [html.div({"class": "meta"}, "No tasks yet.")],
