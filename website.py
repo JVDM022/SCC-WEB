@@ -1330,10 +1330,58 @@ def App():
         value = target.get("value", "")
         set_form_values(lambda prev: {**prev, name: value})
 
+    def is_segmented_field(entity: str, name: str) -> bool:
+        return (
+            (entity == "system_status" and name == "is_online")
+            or (entity == "tasks" and name in {"priority", "status"})
+            or (entity == "documentation" and name == "status")
+            or (entity == "risks" and name == "status")
+            or (entity == "bom" and name == "status")
+        )
+
+    def submitted_form_values(event_data: Dict[str, Any]) -> Dict[str, Any]:
+        values = dict(form_values)
+        target = event_data.get("currentTarget") or event_data.get("target") or {}
+        elements = target.get("elements") or []
+        controls: List[Dict[str, Any]] = []
+        for element in elements:
+            if not isinstance(element, dict):
+                continue
+            tag = str(element.get("tagName") or "").upper()
+            if tag in {"INPUT", "TEXTAREA", "SELECT"}:
+                controls.append(element)
+
+        kind = str(modal.get("kind") or "")
+        entity = ""
+        if kind == "project":
+            fields = ENTITY_DEFS["project"]["fields"]
+            entity = "project"
+        elif kind == "progress":
+            fields = [{"name": "percent"}, {"name": "phase"}]
+        elif kind == "entity":
+            entity = str(modal.get("entity") or "")
+            fields = ENTITY_DEFS.get(entity, {}).get("fields", [])
+        else:
+            fields = []
+
+        input_field_names: List[str] = []
+        for field in fields:
+            name = str(field.get("name") or "")
+            if not name:
+                continue
+            if entity and is_segmented_field(entity, name):
+                continue
+            input_field_names.append(name)
+
+        for name, control in zip(input_field_names, controls):
+            value = control.get("value", "")
+            values[name] = "" if value is None else str(value)
+        return values
+
     def set_progress_phase(phase: str) -> None:
-        if busy_ref.current or phase == data["development"].get("phase"):
+        if busy_ref.current:
             return
-        run_mutation(lambda: update_progress({"phase": phase}))
+        open_progress_modal(phase)
 
     def open_project_modal() -> None:
         if busy_ref.current:
@@ -1344,7 +1392,7 @@ def App():
         set_form_values(initial)
         set_modal({"open": True, "kind": "project", "title": "Edit Project"})
 
-    def open_progress_modal() -> None:
+    def open_progress_modal(selected_phase: str | None = None) -> None:
         if busy_ref.current:
             return
         field_event_ts_ref.current = {}
@@ -1353,6 +1401,10 @@ def App():
             "phase": normalize_phase(progress_row.get("phase")) or "",
             "percent": progress_row.get("percent") or 0,
         }
+        normalized_selected_phase = normalize_phase(selected_phase)
+        if normalized_selected_phase:
+            initial["phase"] = normalized_selected_phase
+            initial["percent"] = PHASE_TO_PERCENT.get(normalized_selected_phase, initial["percent"])
         set_form_values(initial)
         set_modal({"open": True, "kind": "progress", "title": "Update Development Progress"})
 
@@ -1388,20 +1440,21 @@ def App():
         if not modal.get("open") or busy_ref.current:
             return
         kind = modal.get("kind")
+        values = submitted_form_values(event_data)
 
         def commit_form() -> None:
             if kind == "project":
-                update_project(form_values)
+                update_project(values)
             elif kind == "progress":
-                update_progress(form_values)
+                update_progress(values)
             elif kind == "entity":
                 entity = str(modal.get("entity"))
                 if modal.get("mode") == "new":
-                    insert_entity(entity, form_values)
+                    insert_entity(entity, values)
                 else:
                     item_id = int(modal.get("item_id") or 0)
                     if item_id:
-                        update_entity(entity, item_id, form_values)
+                        update_entity(entity, item_id, values)
 
         run_mutation(commit_form)
         close_modal()
@@ -1515,19 +1568,21 @@ def App():
                 html.span({"class": "label"}, label),
                 html.textarea(
                     {
+                        "name": name,
                         "class": "textarea glass-input",
-                        "value": value,
+                        "default_value": value,
                         "disabled": is_busy,
-                        "on_change": lambda event: set_field_from_event(name, event),
+                        "on_blur": lambda event: set_field_from_event(name, event),
                     }
                 ),
             )
         attrs = {
+            "name": name,
             "class": "input glass-input",
             "type": field.get("input_type", "text"),
-            "value": value,
+            "default_value": value,
             "disabled": is_busy,
-            "on_change": lambda event: set_field_from_event(name, event),
+            "on_blur": lambda event: set_field_from_event(name, event),
         }
         if field.get("step"):
             attrs["step"] = field["step"]
@@ -1543,13 +1598,14 @@ def App():
                 html.span({"class": "label"}, "Percent"),
                 html.input(
                     {
+                        "name": "percent",
                         "class": "input glass-input",
                         "type": "number",
                         "min": 0,
                         "max": 100,
-                        "value": percent_value,
+                        "default_value": percent_value,
                         "disabled": is_busy,
-                        "on_change": lambda event: set_field_from_event("percent", event),
+                        "on_blur": lambda event: set_field_from_event("percent", event),
                     }
                 ),
                 html.div({"class": "meta"}, "Use 0-100%"),
@@ -1559,10 +1615,11 @@ def App():
                 html.span({"class": "label"}, "Phase"),
                 html.input(
                     {
+                        "name": "phase",
                         "class": "input glass-input",
-                        "value": phase_value,
+                        "default_value": phase_value,
                         "disabled": is_busy,
-                        "on_change": lambda event: set_field_from_event("phase", event),
+                        "on_blur": lambda event: set_field_from_event("phase", event),
                     }
                 ),
                 html.div({"class": "meta"}, "Concept, Developing, Prototype, Testing, Complete"),
