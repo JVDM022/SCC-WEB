@@ -749,6 +749,11 @@ GLASS_CSS = """
 
 * { box-sizing: border-box; }
 
+html, body {
+  width: 100%;
+  max-width: 100%;
+}
+
 body {
   margin: 0;
   font-family: "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Segoe UI", sans-serif;
@@ -860,6 +865,7 @@ body::after {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
   position: sticky;
   top: 16px;
   z-index: 10;
@@ -870,6 +876,8 @@ body::after {
 .nav-left {
   display: grid;
   gap: 2px;
+  min-width: 0;
+  flex: 1 1 280px;
 }
 
 .nav-eyebrow {
@@ -883,14 +891,21 @@ body::after {
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
 }
 
 .nav-meta {
   font-size: 12px;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
-.nav-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.nav-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 
 .eyebrow {
   text-transform: uppercase;
@@ -1087,6 +1102,7 @@ h2 { font-size: 20px; margin-bottom: 4px; }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .task-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -1226,6 +1242,108 @@ h2 { font-size: 20px; margin-bottom: 4px; }
 }
 
 @media (prefers-color-scheme: dark) {
+  .glass-surface {
+    border-color: rgba(158, 190, 255, 0.24);
+    box-shadow:
+      var(--shadow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  }
+
+  .glass-surface::before {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0));
+    opacity: 0.7;
+  }
+
+  .glass-btn,
+  .btn,
+  .btn.secondary {
+    background: linear-gradient(135deg, rgba(32, 47, 82, 0.84), rgba(20, 30, 56, 0.72));
+    color: var(--text);
+    border-color: rgba(150, 185, 255, 0.28);
+    box-shadow:
+      0 12px 30px rgba(0, 0, 0, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+
+  .glass-btn::before,
+  .btn::before {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 58%),
+      radial-gradient(80px 40px at 20% 0%, rgba(190, 225, 255, 0.24), rgba(255, 255, 255, 0));
+    opacity: 0.7;
+  }
+
+  .btn.primary {
+    color: #eaf5ff;
+    border-color: rgba(98, 180, 255, 0.6);
+    box-shadow:
+      0 16px 40px rgba(20, 120, 255, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  }
+
+  .btn.ghost {
+    background: rgba(120, 150, 220, 0.16);
+    border-color: rgba(160, 190, 255, 0.34);
+  }
+
+  .tag {
+    background: linear-gradient(135deg, rgba(36, 50, 85, 0.82), rgba(26, 36, 64, 0.68));
+    color: #cad7f2;
+    border-color: rgba(150, 185, 255, 0.25);
+  }
+
+  .pill-success { background: rgba(48, 196, 135, 0.22); color: #9af4c8; border-color: rgba(75, 218, 154, 0.44); }
+  .pill-warning { background: rgba(255, 176, 86, 0.22); color: #ffd69f; border-color: rgba(255, 196, 126, 0.42); }
+  .pill-danger { background: rgba(255, 99, 99, 0.24); color: #ffc0c0; border-color: rgba(255, 131, 131, 0.42); }
+  .pill-info { background: rgba(86, 160, 255, 0.23); color: #b9d8ff; border-color: rgba(126, 184, 255, 0.42); }
+  .pill-muted { background: rgba(159, 182, 230, 0.14); color: #c4d1eb; border-color: rgba(174, 197, 245, 0.26); }
+
+  .progress-track { background: rgba(150, 180, 230, 0.22); }
+
+  .phase-step {
+    background: rgba(32, 46, 80, 0.8);
+    color: #c5d4f1;
+    border-color: rgba(158, 190, 255, 0.3);
+  }
+
+  .table th,
+  .table td {
+    border-bottom-color: rgba(170, 195, 240, 0.16);
+  }
+
+  .table th {
+    background: rgba(26, 37, 65, 0.75);
+    color: #c7d6f2;
+  }
+
+  .glass-input,
+  .input, .textarea, .select {
+    border-color: rgba(150, 185, 255, 0.3);
+    background: linear-gradient(135deg, rgba(30, 43, 75, 0.84), rgba(20, 30, 56, 0.68));
+    color: #edf4ff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+
+  .input::placeholder,
+  .textarea::placeholder {
+    color: rgba(201, 216, 245, 0.65);
+  }
+
+  .seg-btn {
+    background: linear-gradient(135deg, rgba(34, 48, 82, 0.84), rgba(22, 33, 60, 0.66));
+    color: #c6d4ef;
+    border-color: rgba(150, 185, 255, 0.28);
+  }
+
+  .seg-btn.active {
+    background: rgba(91, 167, 255, 0.24);
+    border-color: rgba(114, 185, 255, 0.58);
+    color: #def0ff;
+  }
+
+  .link { color: #9dcbff; }
+  .modal { background: rgba(4, 9, 20, 0.62); }
+
   @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     .glass-surface,
     .glass-btn,
@@ -1254,8 +1372,35 @@ h2 { font-size: 20px; margin-bottom: 4px; }
 @media (max-width: 720px) {
   h1 { font-size: 26px; }
   .page { padding: 24px 16px 70px; }
+  .card { padding: 16px; }
   .section-head { align-items: flex-start; }
-  .navbar { margin: 16px 16px 0; }
+  .navbar {
+    margin: 16px 16px 0;
+    padding: 12px 14px;
+    top: 8px;
+  }
+  .nav-left { flex-basis: 100%; }
+  .nav-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .task-row { align-items: flex-start; }
+  .task-row > :last-child {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .phase-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .modal { padding: 12px; }
+  .modal-card {
+    width: min(720px, calc(100vw - 24px));
+    padding: 16px;
+  }
+  .modal-head {
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .form-actions { justify-content: flex-start; }
 }
 
 @media (prefers-reduced-motion: reduce) {
