@@ -61,7 +61,31 @@ try:
 except KeyError as exc:
     raise RuntimeError("DATABASE_URL environment variable is required") from exc
 
+
 DB_POOL: pool.ThreadedConnectionPool | None = None
+
+# Optionally initialize/upgrade schema at process startup if env var is set.
+def maybe_init_db_on_startup() -> None:
+    """Optionally initialize/upgrade schema at process startup.
+
+    IMPORTANT: Do not run schema changes on the request path; it can cause slow first loads
+    and unstable interactive sessions. To run once, set RUN_DB_INIT=1, restart the app,
+    then set RUN_DB_INIT=0 again.
+    """
+    if os.environ.get("RUN_DB_INIT", "0") != "1":
+        return
+
+    db = None
+    try:
+        db = get_db_pool().getconn()
+        init_db(db)
+    finally:
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            get_db_pool().putconn(db)
 
 PHASES = ["Concept", "Developing", "Prototype", "Testing", "Complete"]
 PHASE_TO_PERCENT = {
@@ -298,9 +322,6 @@ def get_db():
     if "db" not in g:
         db = get_db_pool().getconn()
         g.db = db
-        if not app.config.get("DB_INITIALIZED", False):
-            init_db(db)
-            app.config["DB_INITIALIZED"] = True
     return g.db
 
 
@@ -533,6 +554,13 @@ def build_sections() -> List[Dict[str, Any]]:
 
 def normalize_status_key(value: Any) -> str:
     return str(value or "").strip().lower().replace(" ", "").replace("-", "")
+
+
+DOC_TYPE_FILTER_ALL = "__all__"
+
+
+def normalize_doc_type_key(value: Any) -> str:
+    return str(value or "").strip().casefold()
 
 
 def bom_status_class(value: Any) -> str:
@@ -933,6 +961,16 @@ h2 { font-size: 20px; margin-bottom: 4px; }
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 16px;
+}
+
+.doc-filter {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.doc-filter .segmented {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
 }
 
 .glass-btn,
@@ -1425,6 +1463,7 @@ def App():
     data, set_data = hooks.use_state(load_dashboard_data)
     modal, set_modal = hooks.use_state({"open": False})
     form_values, set_form_values = hooks.use_state({})
+    doc_type_filter, set_doc_type_filter = hooks.use_state(DOC_TYPE_FILTER_ALL)
     is_busy, set_is_busy = hooks.use_state(False)
     busy_ref = hooks.use_ref(False)
     field_event_ts_ref = hooks.use_ref({})
@@ -1836,9 +1875,60 @@ def App():
 
     def render_section(section: Dict[str, Any]):
         entity = section["key"]
-        rows = section["rows"]
+        source_rows = section["rows"]
+        rows = source_rows
         fields = section["fields"]
         labels = section["labels"]
+        section_meta = f"Manage {section['title'].lower()} entries."
+        filter_controls = None
+
+        if entity == "documentation":
+            type_label_by_key: Dict[str, str] = {}
+            for row in source_rows:
+                doc_type = str(row.get("doc_type") or "").strip()
+                if not doc_type:
+                    continue
+                key = normalize_doc_type_key(doc_type)
+                if key not in type_label_by_key:
+                    type_label_by_key[key] = doc_type
+
+            filter_options = [{"value": DOC_TYPE_FILTER_ALL, "label": "All"}]
+            filter_options.extend(
+                [
+                    {"value": key, "label": label}
+                    for key, label in sorted(type_label_by_key.items(), key=lambda item: item[1].lower())
+                ]
+            )
+            option_values = {option["value"] for option in filter_options}
+            active_filter = doc_type_filter if doc_type_filter in option_values else DOC_TYPE_FILTER_ALL
+            if active_filter == DOC_TYPE_FILTER_ALL:
+                rows = source_rows
+                filter_label = "All types"
+            else:
+                rows = [row for row in source_rows if normalize_doc_type_key(row.get("doc_type")) == active_filter]
+                filter_label = type_label_by_key.get(active_filter, "Unknown")
+            section_meta = f"Showing {len(rows)} of {len(source_rows)} entries. Filter: {filter_label}."
+            filter_controls = html.div(
+                {"class": "doc-filter"},
+                html.span({"class": "label"}, "Filter by type"),
+                html.div(
+                    {"class": "segmented"},
+                    *[
+                        html.button(
+                            {
+                                "key": option["value"],
+                                "type": "button",
+                                "class": f"seg-btn {'active' if active_filter == option['value'] else ''}",
+                                "disabled": is_busy,
+                                "on_click": lambda event, value=option["value"]: set_doc_type_filter(value),
+                            },
+                            option["label"],
+                        )
+                        for option in filter_options
+                    ],
+                ),
+            )
+
         actions = []
         if entity == "system_status":
             if rows:
@@ -1899,7 +1989,10 @@ def App():
                 ),
             )
             if rows
-            else html.div({"class": "meta"}, "No entries yet.")
+            else html.div(
+                {"class": "meta"},
+                "No documentation entries match this type." if entity == "documentation" and source_rows else "No entries yet.",
+            )
         )
 
         return html.section(
@@ -1908,10 +2001,11 @@ def App():
                 {"class": "section-head"},
                 html.div(
                     html.h2(section["title"]),
-                    html.div({"class": "meta"}, f"Manage {section['title'].lower()} entries."),
+                    html.div({"class": "meta"}, section_meta),
                 ),
                 html.div(actions),
             ),
+            *([filter_controls] if filter_controls else []),
             body,
         )
 
@@ -2091,6 +2185,10 @@ def App():
         render_modal(),
     )
 
+
+
+# One-time optional schema initialization at process startup (not per request)
+maybe_init_db_on_startup()
 
 configure(
     app,
