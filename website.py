@@ -1464,9 +1464,11 @@ def App():
     modal, set_modal = hooks.use_state({"open": False})
     form_values, set_form_values = hooks.use_state({})
     doc_type_filter, set_doc_type_filter = hooks.use_state(DOC_TYPE_FILTER_ALL)
+    is_form_dirty, set_is_form_dirty = hooks.use_state(False)
     is_busy, set_is_busy = hooks.use_state(False)
     busy_ref = hooks.use_ref(False)
     field_event_ts_ref = hooks.use_ref({})
+    submit_intent_ref = hooks.use_ref(False)
 
     def refresh() -> None:
         set_data(load_dashboard_data())
@@ -1484,15 +1486,32 @@ def App():
             busy_ref.current = False
             set_is_busy(False)
 
-    def close_modal(event: Dict[str, Any] | None = None) -> None:
+    def close_modal(event: Dict[str, Any] | None = None, force: bool = False) -> None:
         if busy_ref.current:
             return
+        if modal.get("open") and is_form_dirty and not force:
+            set_modal(lambda prev: {**prev, "confirm_discard": True})
+            return
+        submit_intent_ref.current = False
+        set_is_form_dirty(False)
         set_modal({"open": False})
+
+    def dismiss_discard_warning(event: Dict[str, Any] | None = None) -> None:
+        if busy_ref.current:
+            return
+        set_modal(lambda prev: {**prev, "confirm_discard": False})
+
+    def request_submit(event: Dict[str, Any] | None = None) -> None:
+        if busy_ref.current:
+            return
+        submit_intent_ref.current = True
 
     def set_field(name: str, value: Any) -> None:
         if busy_ref.current:
             return
         set_form_values(lambda prev: {**prev, name: value})
+        if modal.get("open"):
+            set_is_form_dirty(True)
 
     def set_field_from_event(name: str, event: Dict[str, Any]) -> None:
         if busy_ref.current:
@@ -1513,6 +1532,8 @@ def App():
         target = event.get("target", {})
         value = target.get("value", "")
         set_form_values(lambda prev: {**prev, name: value})
+        if modal.get("open"):
+            set_is_form_dirty(True)
 
     def is_segmented_field(entity: str, name: str) -> bool:
         return (
@@ -1571,15 +1592,19 @@ def App():
         if busy_ref.current:
             return
         field_event_ts_ref.current = {}
+        submit_intent_ref.current = False
+        set_is_form_dirty(False)
         fields = ENTITY_DEFS["project"]["fields"]
         initial = {field["name"]: data["project"].get(field["name"], "") for field in fields}
         set_form_values(initial)
-        set_modal({"open": True, "kind": "project", "title": "Edit Project"})
+        set_modal({"open": True, "kind": "project", "title": "Edit Project", "confirm_discard": False})
 
     def open_progress_modal(selected_phase: str | None = None) -> None:
         if busy_ref.current:
             return
         field_event_ts_ref.current = {}
+        submit_intent_ref.current = False
+        set_is_form_dirty(False)
         progress_row = data.get("progress_row", {})
         initial = {
             "phase": normalize_phase(progress_row.get("phase")) or "",
@@ -1590,12 +1615,14 @@ def App():
             initial["phase"] = normalized_selected_phase
             initial["percent"] = PHASE_TO_PERCENT.get(normalized_selected_phase, initial["percent"])
         set_form_values(initial)
-        set_modal({"open": True, "kind": "progress", "title": "Update Development Progress"})
+        set_modal({"open": True, "kind": "progress", "title": "Update Development Progress", "confirm_discard": False})
 
     def open_entity_modal(entity: str, mode: str, item: Dict[str, Any] | None = None) -> None:
         if busy_ref.current:
             return
         field_event_ts_ref.current = {}
+        submit_intent_ref.current = False
+        set_is_form_dirty(False)
         fields = ENTITY_DEFS[entity]["fields"]
         if mode == "new":
             initial = default_values_for(entity, fields)
@@ -1611,6 +1638,7 @@ def App():
                 "mode": mode,
                 "item_id": item.get("id") if item else None,
                 "title": ("Add " if mode == "new" else "Edit ") + ENTITY_DEFS[entity]["label"],
+                "confirm_discard": False,
             }
         )
 
@@ -1623,6 +1651,9 @@ def App():
     def handle_submit(event_data: Dict[str, Any]) -> None:
         if not modal.get("open") or busy_ref.current:
             return
+        if not submit_intent_ref.current:
+            return
+        submit_intent_ref.current = False
         kind = modal.get("kind")
         values = submitted_form_values(event_data)
 
@@ -1641,7 +1672,7 @@ def App():
                         update_entity(entity, item_id, values)
 
         run_mutation(commit_form)
-        close_modal()
+        close_modal(force=True)
 
     def render_segmented(name: str, value: str, options: List[Dict[str, str]]):
         return html.div(
@@ -1756,6 +1787,7 @@ def App():
                         "class": "textarea glass-input",
                         "default_value": value,
                         "disabled": is_busy,
+                        "on_change": lambda event: set_field_from_event(name, event),
                         "on_blur": lambda event: set_field_from_event(name, event),
                     }
                 ),
@@ -1766,6 +1798,7 @@ def App():
             "type": field.get("input_type", "text"),
             "default_value": value,
             "disabled": is_busy,
+            "on_change": lambda event: set_field_from_event(name, event),
             "on_blur": lambda event: set_field_from_event(name, event),
         }
         if field.get("step"):
@@ -1789,6 +1822,7 @@ def App():
                         "max": 100,
                         "default_value": percent_value,
                         "disabled": is_busy,
+                        "on_change": lambda event: set_field_from_event("percent", event),
                         "on_blur": lambda event: set_field_from_event("percent", event),
                     }
                 ),
@@ -1803,6 +1837,7 @@ def App():
                         "class": "input glass-input",
                         "default_value": phase_value,
                         "disabled": is_busy,
+                        "on_change": lambda event: set_field_from_event("phase", event),
                         "on_blur": lambda event: set_field_from_event("phase", event),
                     }
                 ),
@@ -1811,7 +1846,7 @@ def App():
             html.div(
                 {"class": "form-actions"},
                 html.button({"type": "button", "class": "btn glass-btn ghost", "disabled": is_busy, "on_click": close_modal}, "Cancel"),
-                html.button({"type": "submit", "class": "btn glass-btn primary", "disabled": is_busy}, "Save"),
+                html.button({"type": "submit", "class": "btn glass-btn primary", "disabled": is_busy, "on_click": request_submit}, "Save"),
             ),
         )
 
@@ -1823,7 +1858,7 @@ def App():
             html.div(
                 {"class": "form-actions"},
                 html.button({"type": "button", "class": "btn glass-btn ghost", "disabled": is_busy, "on_click": close_modal}, "Cancel"),
-                html.button({"type": "submit", "class": "btn glass-btn primary", "disabled": is_busy}, "Save"),
+                html.button({"type": "submit", "class": "btn glass-btn primary", "disabled": is_busy, "on_click": request_submit}, "Save"),
             ),
         )
 
@@ -1837,6 +1872,35 @@ def App():
             body = render_entity_modal("project")
         else:
             body = render_entity_modal(str(modal.get("entity")))
+        discard_warning = (
+            html.div(
+                {"class": "glass-surface glass-panel", "style": {"padding": "12px", "display": "grid", "gap": "10px"}},
+                html.div({"class": "meta"}, "You have unsaved changes. Discard them?"),
+                html.div(
+                    {"class": "form-actions"},
+                    html.button(
+                        {
+                            "class": "btn glass-btn ghost",
+                            "type": "button",
+                            "disabled": is_busy,
+                            "on_click": dismiss_discard_warning,
+                        },
+                        "Keep editing",
+                    ),
+                    html.button(
+                        {
+                            "class": "btn glass-btn primary",
+                            "type": "button",
+                            "disabled": is_busy,
+                            "on_click": lambda e: close_modal(force=True),
+                        },
+                        "Discard",
+                    ),
+                ),
+            )
+            if modal.get("confirm_discard")
+            else None
+        )
         return html.div(
             {"class": "modal"},
             html.div(
@@ -1846,6 +1910,7 @@ def App():
                     html.h3({"class": "modal-title"}, title),
                     html.button({"class": "btn glass-btn ghost", "type": "button", "disabled": is_busy, "on_click": close_modal}, "Close"),
                 ),
+                *([discard_warning] if discard_warning else []),
                 body,
             ),
         )
@@ -2016,6 +2081,7 @@ def App():
     phase_label = data["project"].get("phase") or "No phase"
 
     return html.div(
+        {"id": "project-hub-root", "data-unsaved": "1" if modal.get("open") and is_form_dirty else "0"},
         html.style(GLASS_CSS),
         html.header(
             {"class": "navbar glass-surface glass-navbar"},
@@ -2199,6 +2265,19 @@ configure(
             {
                 "tagName": "meta",
                 "attributes": {"name": "viewport", "content": "width=device-width, initial-scale=1"},
+            },
+            {
+                "tagName": "script",
+                "children": [
+                    "window.addEventListener('beforeunload', function (event) {"
+                    "  var root = document.getElementById('project-hub-root');"
+                    "  if (!root || root.getAttribute('data-unsaved') !== '1') {"
+                    "    return;"
+                    "  }"
+                    "  event.preventDefault();"
+                    "  event.returnValue = '';"
+                    "});"
+                ],
             },
         )
     ),
