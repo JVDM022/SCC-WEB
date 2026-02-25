@@ -2269,21 +2269,22 @@ def App():
             )
         if entity == "system_status":
             section_meta = "System health, live heater telemetry, and kill controls."
+            return html.section(
+                {"class": "card glass-surface glass-card", "key": entity},
+                html.div(
+                    {"class": "section-head"},
+                    html.div(
+                        html.h2(section["title"]),
+                        html.div({"class": "meta"}, section_meta),
+                    ),
+                ),
+                render_telemetry_dashboard(),
+            )
 
-        actions = []
-        if entity == "system_status":
-            if rows:
-                actions.append(
-                    html.button(
-                        {"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e, row=rows[0]: open_entity_modal(entity, "edit", row)},
-                        "Edit",
-                    )
-                )
-            else:
-                actions.append(html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
-        else:
-            actions.append(html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
-        table_body = (
+        actions = [
+            html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal(entity, "new")}, "Add")
+        ]
+        body = (
             html.div(
                 {"class": "table-wrap glass-surface glass-panel"},
                 html.table(
@@ -2291,7 +2292,7 @@ def App():
                     html.thead(
                         html.tr(
                             *[html.th(labels[field]) for field in fields],
-                            *([] if entity == "system_status" else [html.th("Actions")]),
+                            html.th("Actions"),
                         )
                     ),
                     html.tbody(
@@ -2299,29 +2300,23 @@ def App():
                             html.tr(
                                 {"key": row.get("id", idx)},
                                 *[html.td(render_cell(entity, field, row)) for field in fields],
-                                *(
-                                    []
-                                    if entity == "system_status"
-                                    else [
-                                        html.td(
-                                            html.button(
-                                                {
-                                                    "class": "btn glass-btn ghost",
-                                                    "disabled": is_busy,
-                                                    "on_click": lambda e, row=row: open_entity_modal(entity, "edit", row),
-                                                },
-                                                "Edit",
-                                            ),
-                                            html.button(
-                                                {
-                                                    "class": "btn glass-btn ghost",
-                                                    "disabled": is_busy,
-                                                    "on_click": lambda e, row=row: handle_delete(entity, int(row["id"])),
-                                                },
-                                                "Delete",
-                                            ),
-                                        )
-                                    ]
+                                html.td(
+                                    html.button(
+                                        {
+                                            "class": "btn glass-btn ghost",
+                                            "disabled": is_busy,
+                                            "on_click": lambda e, row=row: open_entity_modal(entity, "edit", row),
+                                        },
+                                        "Edit",
+                                    ),
+                                    html.button(
+                                        {
+                                            "class": "btn glass-btn ghost",
+                                            "disabled": is_busy,
+                                            "on_click": lambda e, row=row: handle_delete(entity, int(row["id"])),
+                                        },
+                                        "Delete",
+                                    ),
                                 ),
                             )
                             for idx, row in enumerate(rows)
@@ -2335,10 +2330,6 @@ def App():
                 "No documentation entries match this type." if entity == "documentation" and source_rows else "No entries yet.",
             )
         )
-        if entity == "system_status":
-            body = html.div({"style": {"display": "grid", "gap": "12px"}}, render_telemetry_dashboard(), table_body)
-        else:
-            body = table_body
 
         return html.section(
             {"class": "card glass-surface glass-card", "key": entity},
