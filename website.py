@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List
 
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
+import requests
 
 # Python 3.14: legacy AST node aliases removed. Werkzeug still expects them.
 if not hasattr(ast, "Str"):
@@ -85,6 +86,7 @@ except KeyError as exc:
 
 
 DB_POOL: pool.ThreadedConnectionPool | None = None
+AZURE_TIMEOUT_SECONDS = float(os.environ.get("AZURE_TIMEOUT_SECONDS", "5"))
 
 # Optionally initialize/upgrade schema at process startup if env var is set.
 def maybe_init_db_on_startup() -> None:
@@ -429,6 +431,101 @@ def parse_date(value: Any) -> datetime | None:
     return None
 
 
+def required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"{name} is not configured")
+    if "<" in value and ">" in value:
+        raise RuntimeError(f"{name} is not configured")
+    return value
+
+
+def azure_json_request(method: str, url: str, payload: Dict[str, Any] | None = None) -> tuple[Any, int]:
+    try:
+        response = requests.request(method, url, json=payload, timeout=AZURE_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        raise RuntimeError("Azure relay is unavailable") from exc
+
+    try:
+        body: Any = response.json()
+    except ValueError:
+        body = {"raw": response.text}
+
+    if response.status_code >= 400:
+        raise RuntimeError(f"Azure relay returned {response.status_code}: {body}")
+    return body, response.status_code
+
+
+def coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def coerce_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "online", "enabled", "active"}:
+        return True
+    if text in {"0", "false", "no", "off", "offline", "disabled", "inactive"}:
+        return False
+    return None
+
+
+def first_payload_value(payload: Dict[str, Any], keys: List[str]) -> Any:
+    for key in keys:
+        value = payload.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def load_heater_telemetry() -> Dict[str, Any]:
+    url = required_env("AZ_TELEMETRY_URL")
+    body, _ = azure_json_request("GET", url)
+    if not isinstance(body, dict):
+        raise RuntimeError("Telemetry response is not a JSON object")
+
+    temperature = coerce_float(first_payload_value(body, ["temperature", "temp", "temperature_c"]))
+    heater_on = coerce_bool(first_payload_value(body, ["heater_on", "heaterOn", "heater"]))
+    kill_state = coerce_bool(first_payload_value(body, ["kill", "kill_state", "killed"]))
+
+    return {
+        "temperature": temperature,
+        "heater_on": heater_on,
+        "kill_state": kill_state,
+        "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def load_heater_telemetry_safe() -> Dict[str, Any]:
+    try:
+        telemetry = load_heater_telemetry()
+    except Exception as exc:
+        app.logger.exception("Failed to load heater telemetry")
+        return {
+            "temperature": None,
+            "heater_on": None,
+            "kill_state": None,
+            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "error": str(exc),
+        }
+    telemetry["error"] = ""
+    return telemetry
+
+
+def send_heater_command(value: Any) -> Dict[str, Any]:
+    url = required_env("AZ_COMMAND_URL")
+    body, status = azure_json_request("POST", url, payload={"type": "KILL", "value": value})
+    return {"status": status, "response": body}
+
+
 def priority_class(value: Any) -> str:
     text = str(value or "").strip().lower()
     if text == "high":
@@ -747,6 +844,34 @@ def api_progress():
     payload = request.get_json(silent=True) or {}
     update_progress(payload)
     return jsonify({"ok": True})
+
+
+@app.route("/api/telemetry", methods=["GET"])
+def api_telemetry():
+    telemetry = load_heater_telemetry_safe()
+    if telemetry.get("error"):
+        return jsonify({"error": telemetry["error"]}), 502
+    return jsonify(telemetry)
+
+
+@app.route("/api/command", methods=["POST"])
+def api_command():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Expected a JSON object body"}), 400
+    if "value" not in payload:
+        return jsonify({"error": "Field 'value' is required"}), 400
+
+    command_type = str(payload.get("type") or "").strip().upper()
+    if command_type and command_type != "KILL":
+        return jsonify({"error": "Only command type 'KILL' is supported"}), 400
+
+    try:
+        result = send_heater_command(payload.get("value"))
+    except Exception as exc:
+        app.logger.exception("Failed to send heater command")
+        return jsonify({"error": str(exc)}), 502
+    return jsonify(result)
 
 
 @app.route("/api/<entity>", methods=["GET", "POST"])
@@ -1506,6 +1631,8 @@ h2 { font-size: 20px; margin-bottom: 4px; }
 @component
 def App():
     data, set_data = hooks.use_state(load_dashboard_data_safe)
+    telemetry, set_telemetry = hooks.use_state(load_heater_telemetry_safe)
+    control_feedback, set_control_feedback = hooks.use_state("")
     modal, set_modal = hooks.use_state({"open": False})
     form_values, set_form_values = hooks.use_state({})
     doc_type_filter, set_doc_type_filter = hooks.use_state(DOC_TYPE_FILTER_ALL)
@@ -1530,6 +1657,26 @@ def App():
         finally:
             busy_ref.current = False
             set_is_busy(False)
+
+    def refresh_telemetry() -> None:
+        def do_refresh() -> None:
+            set_control_feedback("")
+            set_telemetry(load_heater_telemetry_safe())
+
+        run_mutation(do_refresh, refresh_after=False)
+
+    def send_kill_command(value: int) -> None:
+        def do_send() -> None:
+            set_control_feedback("")
+            try:
+                send_heater_command(value)
+                set_control_feedback("KILL command sent." if value == 1 else "UNKILL command sent.")
+            except Exception as exc:
+                app.logger.exception("Failed to send heater command")
+                set_control_feedback(f"Command failed: {exc}")
+            set_telemetry(load_heater_telemetry_safe())
+
+        run_mutation(do_send, refresh_after=False)
 
     def close_modal(event: Dict[str, Any] | None = None, force: bool = False) -> None:
         if busy_ref.current:
@@ -1983,6 +2130,88 @@ def App():
             return html.span({"class": f"pill {risk_status_class(value)}"}, value or "")
         return value or ""
 
+    def render_telemetry_dashboard():
+        temperature = telemetry.get("temperature")
+        if isinstance(temperature, (int, float)):
+            temperature_label = f"{float(temperature):.1f} °C"
+        else:
+            temperature_label = "--"
+
+        heater_on = telemetry.get("heater_on")
+        if heater_on is True:
+            heater_label = "ON"
+            heater_class = "pill-warning"
+        elif heater_on is False:
+            heater_label = "OFF"
+            heater_class = "pill-muted"
+        else:
+            heater_label = "Unknown"
+            heater_class = "pill-muted"
+
+        kill_state = telemetry.get("kill_state")
+        if kill_state is True:
+            kill_label = "KILLED"
+            kill_class = "pill-danger"
+        elif kill_state is False:
+            kill_label = "ACTIVE"
+            kill_class = "pill-success"
+        else:
+            kill_label = "Unknown"
+            kill_class = "pill-muted"
+
+        fetched_at = str(telemetry.get("fetched_at") or "")
+        telemetry_error = str(telemetry.get("error") or "")
+
+        status_message = control_feedback if control_feedback else (telemetry_error if telemetry_error else "")
+        status_class = "pill-danger" if telemetry_error else ("pill-info" if control_feedback else "pill-muted")
+
+        return html.div(
+            {"class": "glass-surface glass-panel", "style": {"padding": "14px", "display": "grid", "gap": "12px"}},
+            html.div(
+                {"class": "section-head"},
+                html.div(
+                    html.h3("Heater Status, Telemetry, Control"),
+                    html.div({"class": "meta"}, f"Last telemetry: {fetched_at}" if fetched_at else "No telemetry yet"),
+                ),
+                html.div(
+                    html.button(
+                        {"class": "btn glass-btn ghost", "type": "button", "disabled": is_busy, "on_click": lambda e: refresh_telemetry()},
+                        "Refresh",
+                    ),
+                ),
+            ),
+            html.div(
+                {"style": {"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(160px, 1fr))", "gap": "10px"}},
+                html.div(
+                    {"class": "glass-surface glass-panel", "style": {"padding": "10px"}},
+                    html.div({"class": "meta"}, "Temperature"),
+                    html.div(temperature_label),
+                ),
+                html.div(
+                    {"class": "glass-surface glass-panel", "style": {"padding": "10px"}},
+                    html.div({"class": "meta"}, "Heater"),
+                    html.span({"class": f"pill {heater_class}"}, heater_label),
+                ),
+                html.div(
+                    {"class": "glass-surface glass-panel", "style": {"padding": "10px"}},
+                    html.div({"class": "meta"}, "Kill State"),
+                    html.span({"class": f"pill {kill_class}"}, kill_label),
+                ),
+            ),
+            html.div(
+                {"class": "form-actions"},
+                html.button(
+                    {"class": "btn glass-btn primary", "type": "button", "disabled": is_busy, "on_click": lambda e: send_kill_command(1)},
+                    "KILL",
+                ),
+                html.button(
+                    {"class": "btn glass-btn", "type": "button", "disabled": is_busy, "on_click": lambda e: send_kill_command(0)},
+                    "UNKILL",
+                ),
+            ),
+            html.div({"class": f"pill {status_class}"}, status_message or "Ready"),
+        )
+
     def render_section(section: Dict[str, Any]):
         entity = section["key"]
         source_rows = section["rows"]
@@ -2038,6 +2267,8 @@ def App():
                     ],
                 ),
             )
+        if entity == "system_status":
+            section_meta = "System health, live heater telemetry, and kill controls."
 
         actions = []
         if entity == "system_status":
@@ -2052,7 +2283,7 @@ def App():
                 actions.append(html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
         else:
             actions.append(html.button({"class": "btn glass-btn", "disabled": is_busy, "on_click": lambda e: open_entity_modal(entity, "new")}, "Add"))
-        body = (
+        table_body = (
             html.div(
                 {"class": "table-wrap glass-surface glass-panel"},
                 html.table(
@@ -2104,6 +2335,10 @@ def App():
                 "No documentation entries match this type." if entity == "documentation" and source_rows else "No entries yet.",
             )
         )
+        if entity == "system_status":
+            body = html.div({"style": {"display": "grid", "gap": "12px"}}, render_telemetry_dashboard(), table_body)
+        else:
+            body = table_body
 
         return html.section(
             {"class": "card glass-surface glass-card", "key": entity},
