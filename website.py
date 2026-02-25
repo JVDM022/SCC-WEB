@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import ast
+import csv
 import importlib.util
 import os
 import pkgutil
+import threading
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 from psycopg2 import pool
@@ -51,7 +54,7 @@ if not hasattr(pkgutil, "get_loader"):
 
     pkgutil.get_loader = _get_loader  # type: ignore[attr-defined]
 
-from flask import Flask, abort, g, jsonify, request
+from flask import Flask, abort, g, jsonify, request, send_file
 from reactpy import component, event, hooks, html
 from reactpy.backend.flask import Options, configure
 
@@ -87,6 +90,16 @@ except KeyError as exc:
 
 DB_POOL: pool.ThreadedConnectionPool | None = None
 AZURE_TIMEOUT_SECONDS = float(os.environ.get("AZURE_TIMEOUT_SECONDS", "5"))
+TELEMETRY_LOG_PATH = Path(
+    os.environ.get("TELEMETRY_LOG_PATH", str(Path.cwd() / "system_status_temperature_log.csv"))
+).expanduser()
+TELEMETRY_LOG_HEADERS = [
+    "timestamp",
+    "temperature_c",
+    "heater_on",
+    "kill_state",
+]
+TELEMETRY_LOG_LOCK = threading.Lock()
 
 # Optionally initialize/upgrade schema at process startup if env var is set.
 def maybe_init_db_on_startup() -> None:
@@ -486,6 +499,50 @@ def first_payload_value(payload: Dict[str, Any], keys: List[str]) -> Any:
     return None
 
 
+def bool_to_log_value(value: Any) -> str:
+    if value is True:
+        return "1"
+    if value is False:
+        return "0"
+    return ""
+
+
+def ensure_telemetry_log_file() -> None:
+    TELEMETRY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if TELEMETRY_LOG_PATH.exists():
+        return
+    with TELEMETRY_LOG_PATH.open("w", newline="", encoding="utf-8") as log_file:
+        writer = csv.DictWriter(log_file, fieldnames=TELEMETRY_LOG_HEADERS)
+        writer.writeheader()
+
+
+def append_telemetry_log_sample(telemetry: Dict[str, Any]) -> None:
+    temperature = telemetry.get("temperature")
+    if temperature is None:
+        return
+
+    row = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "temperature_c": f"{float(temperature):.4f}",
+        "heater_on": bool_to_log_value(telemetry.get("heater_on")),
+        "kill_state": bool_to_log_value(telemetry.get("kill_state")),
+    }
+    with TELEMETRY_LOG_LOCK:
+        ensure_telemetry_log_file()
+        with TELEMETRY_LOG_PATH.open("a", newline="", encoding="utf-8") as log_file:
+            writer = csv.DictWriter(log_file, fieldnames=TELEMETRY_LOG_HEADERS)
+            writer.writerow(row)
+
+
+def telemetry_log_sample_count() -> int:
+    if not TELEMETRY_LOG_PATH.exists():
+        return 0
+    with TELEMETRY_LOG_LOCK:
+        with TELEMETRY_LOG_PATH.open("r", encoding="utf-8") as log_file:
+            row_count = sum(1 for _ in log_file)
+    return max(0, row_count - 1)
+
+
 def load_heater_telemetry() -> Dict[str, Any]:
     url = required_env("AZ_TELEMETRY_URL")
     body, _ = azure_json_request("GET", url)
@@ -516,6 +573,10 @@ def load_heater_telemetry_safe() -> Dict[str, Any]:
             "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "error": str(exc),
         }
+    try:
+        append_telemetry_log_sample(telemetry)
+    except Exception:
+        app.logger.exception("Failed to append telemetry log sample")
     telemetry["error"] = ""
     return telemetry
 
@@ -872,6 +933,29 @@ def api_command():
         app.logger.exception("Failed to send heater command")
         return jsonify({"error": str(exc)}), 502
     return jsonify(result)
+
+
+@app.route("/api/system-status/telemetry-log", methods=["GET"])
+def api_telemetry_log_meta():
+    return jsonify(
+        {
+            "ok": True,
+            "sample_count": telemetry_log_sample_count(),
+            "download_url": "/api/system-status/telemetry-log.csv",
+        }
+    )
+
+
+@app.route("/api/system-status/telemetry-log.csv", methods=["GET"])
+def api_telemetry_log_csv():
+    with TELEMETRY_LOG_LOCK:
+        ensure_telemetry_log_file()
+    return send_file(
+        TELEMETRY_LOG_PATH,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=TELEMETRY_LOG_PATH.name,
+    )
 
 
 @app.route("/api/<entity>", methods=["GET", "POST"])
@@ -2161,6 +2245,7 @@ def App():
 
         fetched_at = str(telemetry.get("fetched_at") or "")
         telemetry_error = str(telemetry.get("error") or "")
+        logged_samples = telemetry_log_sample_count()
 
         status_message = control_feedback if control_feedback else (telemetry_error if telemetry_error else "")
         status_class = "pill-danger" if telemetry_error else ("pill-info" if control_feedback else "pill-muted")
@@ -2208,6 +2293,15 @@ def App():
                     {"class": "btn glass-btn", "type": "button", "disabled": is_busy, "on_click": lambda e: send_kill_command(0)},
                     "UNKILL",
                 ),
+            ),
+            html.div(
+                {"class": "meta"},
+                f"Logged samples: {logged_samples} · ",
+                html.a(
+                    {"class": "link", "href": "/api/system-status/telemetry-log.csv", "target": "_blank", "rel": "noopener"},
+                    "Download CSV",
+                ),
+                " (MATLAB/Python ready)",
             ),
             html.div({"class": f"pill {status_class}"}, status_message or "Ready"),
         )
