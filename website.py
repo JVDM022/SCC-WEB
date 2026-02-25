@@ -54,6 +54,28 @@ from flask import Flask, abort, g, jsonify, request
 from reactpy import component, event, hooks, html
 from reactpy.backend.flask import Options, configure
 
+
+def load_dotenv(path: str = ".env") -> None:
+    if not os.path.exists(path):
+        return
+
+    try:
+        with open(path, "r", encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip("'").strip('"')
+                if key:
+                    os.environ.setdefault(key, value)
+    except OSError:
+        pass
+
+
+load_dotenv()
+
 app = Flask(__name__)
 
 try:
@@ -591,6 +613,29 @@ def load_dashboard_data() -> Dict[str, Any]:
         "sections": build_sections(),
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
+
+
+def empty_dashboard_data(error: str = "") -> Dict[str, Any]:
+    return {
+        "project": {"name": "Project", "phase": ""},
+        "development": {"percent_value": 0, "percent_label": "0%", "phase": ""},
+        "progress_row": {"percent": None, "phase": "", "status_text": ""},
+        "logs": [],
+        "tasks": {"bars": []},
+        "sections": [],
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "error": error,
+    }
+
+
+def load_dashboard_data_safe() -> Dict[str, Any]:
+    try:
+        data = load_dashboard_data()
+    except Exception as exc:
+        app.logger.exception("Failed to load dashboard data")
+        return empty_dashboard_data(error=str(exc))
+    data["error"] = ""
+    return data
 
 
 def sanitize_payload(entity: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1460,7 +1505,7 @@ h2 { font-size: 20px; margin-bottom: 4px; }
 
 @component
 def App():
-    data, set_data = hooks.use_state(load_dashboard_data)
+    data, set_data = hooks.use_state(load_dashboard_data_safe)
     modal, set_modal = hooks.use_state({"open": False})
     form_values, set_form_values = hooks.use_state({})
     doc_type_filter, set_doc_type_filter = hooks.use_state(DOC_TYPE_FILTER_ALL)
@@ -1471,7 +1516,7 @@ def App():
     submit_intent_ref = hooks.use_ref(False)
 
     def refresh() -> None:
-        set_data(load_dashboard_data())
+        set_data(load_dashboard_data_safe())
 
     def run_mutation(action: Callable[[], None], refresh_after: bool = True) -> None:
         if busy_ref.current:
@@ -2080,6 +2125,31 @@ def App():
     progress_label = development.get("percent_label") or "0%"
     phase_label = data["project"].get("phase") or "No phase"
 
+    if data.get("error"):
+        return html.div(
+            {"id": "project-hub-root"},
+            html.style(GLASS_CSS),
+            html.main(
+                {"class": "page"},
+                html.section(
+                    {"class": "card glass-surface glass-card"},
+                    html.h1("Dashboard unavailable"),
+                    html.div(
+                        {"class": "meta"},
+                        "The app started, but data could not be loaded. Check DATABASE_URL and database connectivity.",
+                    ),
+                    html.pre({"class": "meta", "style": {"whiteSpace": "pre-wrap"}}, data.get("error") or "Unknown error"),
+                    html.div(
+                        {"class": "form-actions"},
+                        html.button(
+                            {"class": "btn glass-btn primary", "type": "button", "disabled": is_busy, "on_click": lambda e: refresh()},
+                            "Retry",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
     return html.div(
         {"id": "project-hub-root", "data-unsaved": "1" if modal.get("open") and is_form_dirty else "0"},
         html.style(GLASS_CSS),
@@ -2285,4 +2355,8 @@ configure(
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "5001")),
+        debug=os.environ.get("FLASK_DEBUG", "0") == "1",
+    )
