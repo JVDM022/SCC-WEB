@@ -543,6 +543,57 @@ h2 { font-size: 20px; margin-bottom: 4px; }
   justify-content: flex-end;
 }
 
+/* Stepper control (Apple-style) */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.5));
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 12px;
+  padding: 8px 12px;
+  width: fit-content;
+}
+
+.stepper-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.35));
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, background 0.15s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.stepper-btn:hover:not(:disabled) {
+  transform: scale(1.08);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.5));
+}
+
+.stepper-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.stepper-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stepper-value {
+  min-width: 40px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
   .glass-surface,
   .glass-btn,
@@ -650,6 +701,26 @@ h2 { font-size: 20px; margin-bottom: 4px; }
     background: rgba(91, 167, 255, 0.24);
     border-color: rgba(114, 185, 255, 0.58);
     color: #def0ff;
+  }
+
+  .stepper {
+    background: linear-gradient(135deg, rgba(30, 43, 75, 0.84), rgba(20, 30, 56, 0.68));
+    border-color: rgba(150, 185, 255, 0.3);
+  }
+
+  .stepper-btn {
+    background: linear-gradient(135deg, rgba(34, 48, 82, 0.84), rgba(22, 33, 60, 0.66));
+    color: #c6d4ef;
+    border-color: rgba(150, 185, 255, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+
+  .stepper-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, rgba(40, 55, 95, 0.95), rgba(25, 37, 70, 0.75));
+  }
+
+  .stepper-value {
+    color: #edf4ff;
   }
 
   .link { color: #9dcbff; }

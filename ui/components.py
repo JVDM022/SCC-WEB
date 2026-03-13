@@ -309,6 +309,32 @@ def App():
             ],
         )
 
+    def render_stepper(name: str, value: int | float, min_val: int = 0, max_val: int = 100, step: int = 1):
+        """Render a stepper control for numeric input (Apple-style)"""
+        current = int(value) if value else min_val
+        return html.div(
+            {"class": "stepper"},
+            html.button(
+                {
+                    "type": "button",
+                    "class": "stepper-btn stepper-minus",
+                    "disabled": is_busy or current <= min_val,
+                    "on_click": lambda e: set_field(name, max(min_val, current - step)),
+                },
+                "−",
+            ),
+            html.span({"class": "stepper-value"}, str(current)),
+            html.button(
+                {
+                    "type": "button",
+                    "class": "stepper-btn stepper-plus",
+                    "disabled": is_busy or current >= max_val,
+                    "on_click": lambda e: set_field(name, min(max_val, current + step)),
+                },
+                "+",
+            ),
+        )
+
     def render_field(entity: str, field: Dict[str, Any]):
         name = field["name"]
         label = field["label"]
@@ -430,35 +456,23 @@ def App():
             html.div(
                 {"class": "field"},
                 html.span({"class": "label"}, "Percent"),
-                html.input(
-                    {
-                        "name": "percent",
-                        "class": "input glass-input",
-                        "type": "number",
-                        "min": 0,
-                        "max": 100,
-                        "default_value": percent_value,
-                        "disabled": is_busy,
-                        "on_change": lambda event: set_field_from_event("percent", event),
-                        "on_blur": lambda event: set_field_from_event("percent", event),
-                    }
-                ),
-                html.div({"class": "meta"}, "Use 0-100%"),
+                render_stepper("percent", percent_value, 0, 100, 5),
+                html.div({"class": "meta"}, f"{percent_value}%"),
             ),
             html.div(
                 {"class": "field"},
                 html.span({"class": "label"}, "Phase"),
-                html.input(
-                    {
-                        "name": "phase",
-                        "class": "input glass-input",
-                        "default_value": phase_value,
-                        "disabled": is_busy,
-                        "on_change": lambda event: set_field_from_event("phase", event),
-                        "on_blur": lambda event: set_field_from_event("phase", event),
-                    }
+                render_segmented(
+                    "phase",
+                    str(phase_value or ""),
+                    [
+                        {"label": "Concept", "value": "Concept"},
+                        {"label": "Developing", "value": "Developing"},
+                        {"label": "Prototype", "value": "Prototype"},
+                        {"label": "Testing", "value": "Testing"},
+                        {"label": "Complete", "value": "Complete"},
+                    ],
                 ),
-                html.div({"class": "meta"}, "Concept, Developing, Prototype, Testing, Complete"),
             ),
             html.div(
                 {"class": "form-actions"},
