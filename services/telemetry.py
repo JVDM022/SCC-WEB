@@ -7,6 +7,10 @@ from typing import Any, Dict, List
 from config import TELEMETRY_LOG_HEADERS, TELEMETRY_LOG_LOCK, TELEMETRY_LOG_PATH
 
 
+_TELEMETRY_LOG_COUNT_CACHE: int | None = None
+_TELEMETRY_LOG_COUNT_SIGNATURE: tuple[int, int] | None = None
+
+
 def coerce_float(value: Any) -> float | None:
     try:
         return float(value)
@@ -55,6 +59,8 @@ def ensure_telemetry_log_file() -> None:
 
 
 def append_telemetry_log_sample(telemetry: Dict[str, Any]) -> None:
+    global _TELEMETRY_LOG_COUNT_CACHE, _TELEMETRY_LOG_COUNT_SIGNATURE
+
     temperature = telemetry.get("temperature")
     if temperature is None:
         return
@@ -70,12 +76,37 @@ def append_telemetry_log_sample(telemetry: Dict[str, Any]) -> None:
         with TELEMETRY_LOG_PATH.open("a", newline="", encoding="utf-8") as log_file:
             writer = csv.DictWriter(log_file, fieldnames=TELEMETRY_LOG_HEADERS)
             writer.writerow(row)
+        _TELEMETRY_LOG_COUNT_CACHE = None
+        _TELEMETRY_LOG_COUNT_SIGNATURE = None
+
+
+def telemetry_log_signature() -> tuple[int, int] | None:
+    try:
+        stat = TELEMETRY_LOG_PATH.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
 
 
 def telemetry_log_sample_count() -> int:
-    if not TELEMETRY_LOG_PATH.exists():
-        return 0
+    global _TELEMETRY_LOG_COUNT_CACHE, _TELEMETRY_LOG_COUNT_SIGNATURE
+
     with TELEMETRY_LOG_LOCK:
+        if not TELEMETRY_LOG_PATH.exists():
+            _TELEMETRY_LOG_COUNT_CACHE = 0
+            _TELEMETRY_LOG_COUNT_SIGNATURE = None
+            return 0
+
+        signature = telemetry_log_signature()
+        if (
+            _TELEMETRY_LOG_COUNT_CACHE is not None
+            and _TELEMETRY_LOG_COUNT_SIGNATURE == signature
+        ):
+            return _TELEMETRY_LOG_COUNT_CACHE
+
         with TELEMETRY_LOG_PATH.open("r", encoding="utf-8") as log_file:
             row_count = sum(1 for _ in log_file)
-    return max(0, row_count - 1)
+        count = max(0, row_count - 1)
+        _TELEMETRY_LOG_COUNT_CACHE = count
+        _TELEMETRY_LOG_COUNT_SIGNATURE = signature
+        return count

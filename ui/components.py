@@ -113,58 +113,141 @@ def format_uptime(seconds: Any) -> str:
     return " ".join(parts)
 
 
+def empty_telemetry_state() -> Dict[str, Any]:
+    return {
+        "temperature": None,
+        "heater_on": None,
+        "kill_state": None,
+        "system_on": None,
+        "uptime_seconds": None,
+        "fetched_at": "",
+        "error": "",
+    }
+
+
 @component
 def App():
-    # Data & State Management
     data, set_data = hooks.use_state(load_dashboard_data_safe)
-    telemetry, set_telemetry = hooks.use_state(load_heater_telemetry_safe)
-    
-    # Modal State - Simplified
+    telemetry, set_telemetry = hooks.use_state(empty_telemetry_state)
+    telemetry_samples, set_telemetry_samples = hooks.use_state(lambda: 0)
     modal_state, set_modal_state = hooks.use_state({
         "open": False,
-        "type": None,  # "edit_project", "edit_progress", "new_entity", "edit_entity", "delete_confirm"
-        "entity": None,  # For entity modals: "tasks", "bom", etc.
-        "item_id": None,  # For edit/delete
-        "item_data": None,  # Current item being edited
+        "type": None,
+        "entity": None,
+        "item_id": None,
+        "item_data": None,
     })
-    
-    # Form State - Controlled inputs
     form_values, set_form_values = hooks.use_state({})
     form_dirty, set_form_dirty = hooks.use_state(False)
     is_busy, set_is_busy = hooks.use_state(False)
     control_feedback, set_control_feedback = hooks.use_state("")
     doc_type_filter, set_doc_type_filter = hooks.use_state(DOC_TYPE_FILTER_ALL)
+    busy_ref = hooks.use_ref(False)
+    field_event_ts_ref = hooks.use_ref({})
+    submit_intent_ref = hooks.use_ref(False)
 
-    # Helper: Get field value from form with default
     def get_field_value(name: str, default: Any = "") -> Any:
         return form_values.get(name, default)
 
-    def set_field_value(name: str, value: Any) -> None:
-        if is_busy:
+    def refresh_dashboard() -> None:
+        set_data(load_dashboard_data_safe())
+
+    def load_telemetry_snapshot() -> None:
+        set_telemetry(load_heater_telemetry_safe())
+        set_telemetry_samples(telemetry_log_sample_count())
+
+    hooks.use_effect(load_telemetry_snapshot, [])
+
+    def set_field(name: str, value: Any) -> None:
+        if busy_ref.current:
             return
         set_form_values(lambda prev: {**prev, name: value})
-        set_form_dirty(True)
+        if modal_state.get("open"):
+            set_form_dirty(True)
 
-    # Modal Management
-    def open_modal(modal_type: str, **kwargs) -> None:
-        if is_busy:
+    def set_field_from_event(name: str, event_data: Dict[str, Any]) -> None:
+        if busy_ref.current:
             return
-        set_form_values({})
-        set_form_dirty(False)
-        set_modal_state({"open": True, "type": modal_type, **kwargs})
+
+        ts_raw = event_data.get("timeStamp")
+        if ts_raw is None:
+            ts_raw = event_data.get("timestamp")
+        if ts_raw is not None:
+            try:
+                ts = float(ts_raw)
+            except (TypeError, ValueError):
+                ts = None
+            else:
+                last_ts = field_event_ts_ref.current.get(name, -1.0)
+                if ts <= last_ts:
+                    return
+                field_event_ts_ref.current[name] = ts
+
+        target = event_data.get("target", {})
+        set_field(name, target.get("value", ""))
+
+    def is_segmented_field(entity: str, name: str) -> bool:
+        return (
+            (entity == "system_status" and name == "is_online")
+            or (entity == "tasks" and name in {"priority", "status"})
+            or (entity == "documentation" and name == "status")
+            or (entity == "risks" and name == "status")
+            or (entity == "bom" and name == "status")
+        )
+
+    def submitted_form_values(event_data: Dict[str, Any]) -> Dict[str, Any]:
+        values = dict(form_values)
+        target = event_data.get("currentTarget") or event_data.get("target") or {}
+        elements = target.get("elements") or []
+        controls: List[Dict[str, Any]] = []
+        for element in elements:
+            if not isinstance(element, dict):
+                continue
+            tag = str(element.get("tagName") or "").upper()
+            if tag in {"INPUT", "TEXTAREA", "SELECT"}:
+                controls.append(element)
+
+        modal_type = str(modal_state.get("type") or "")
+        entity = ""
+        if modal_type == "edit_project":
+            entity = "project"
+            fields = ENTITY_DEFS["project"]["fields"]
+        elif modal_type == "edit_progress":
+            fields = [{"name": "percent"}, {"name": "phase"}]
+        elif modal_type in {"new_entity", "edit_entity"}:
+            entity = str(modal_state.get("entity") or "")
+            fields = ENTITY_DEFS.get(entity, {}).get("fields", [])
+        else:
+            fields = []
+
+        input_field_names: List[str] = []
+        for field in fields:
+            name = str(field.get("name") or "")
+            if not name:
+                continue
+            if entity and is_segmented_field(entity, name):
+                continue
+            input_field_names.append(name)
+
+        for name, control in zip(input_field_names, controls):
+            value = control.get("value", "")
+            values[name] = "" if value is None else str(value)
+        return values
 
     def close_modal(force: bool = False) -> None:
-        if is_busy:
+        if busy_ref.current:
             return
         if modal_state.get("open") and form_dirty and not force:
-            # Show discard warning
             set_modal_state(lambda prev: {**prev, "confirm_close": True})
-        else:
-            set_modal_state({"open": False, "type": None})
-            set_form_values({})
-            set_form_dirty(False)
+            return
+
+        submit_intent_ref.current = False
+        set_modal_state({"open": False, "type": None})
+        set_form_values({})
+        set_form_dirty(False)
 
     def confirm_close() -> None:
+        submit_intent_ref.current = False
         set_modal_state({"open": False, "type": None})
         set_form_values({})
         set_form_dirty(False)
@@ -172,44 +255,122 @@ def App():
     def dismiss_close_warning() -> None:
         set_modal_state(lambda prev: {**prev, "confirm_close": False})
 
-    # Data mutations
     def run_mutation(action: Callable[[], None], refresh_after: bool = True) -> None:
-        if is_busy:
+        if busy_ref.current:
             return
+        busy_ref.current = True
         set_is_busy(True)
         try:
             action()
             if refresh_after:
-                set_data(load_dashboard_data_safe())
+                refresh_dashboard()
         finally:
+            busy_ref.current = False
             set_is_busy(False)
 
-    def handle_save_project() -> None:
+    def request_submit() -> None:
+        if busy_ref.current:
+            return
+        submit_intent_ref.current = True
+
+    @event(prevent_default=True)
+    def handle_submit(event_data: Dict[str, Any]) -> None:
+        if not modal_state.get("open") or busy_ref.current:
+            return
+        if not submit_intent_ref.current:
+            return
+
+        submit_intent_ref.current = False
+        modal_type = str(modal_state.get("type") or "")
+        values = submitted_form_values(event_data)
+
         def do_save() -> None:
-            update_project(form_values)
-            set_control_feedback("Project updated")
+            if modal_type == "edit_project":
+                update_project(values)
+                set_control_feedback("Project updated")
+            elif modal_type == "edit_progress":
+                update_progress(values)
+                set_control_feedback("Progress updated")
+            elif modal_type in {"new_entity", "edit_entity"}:
+                entity = str(modal_state.get("entity") or "")
+                item_id = int(modal_state.get("item_id") or 0)
+                if modal_type == "edit_entity" and item_id:
+                    update_entity(entity, item_id, values)
+                    set_control_feedback(f"{ENTITY_DEFS[entity]['label']} updated")
+                else:
+                    insert_entity(entity, values)
+                    set_control_feedback(f"{ENTITY_DEFS[entity]['label']} added")
+
         run_mutation(do_save)
         close_modal(force=True)
 
-    def handle_save_progress() -> None:
-        def do_save() -> None:
-            update_progress(form_values)
-            set_control_feedback("Progress updated")
-        run_mutation(do_save)
-        close_modal(force=True)
+    def open_project_modal() -> None:
+        if busy_ref.current:
+            return
+        field_event_ts_ref.current = {}
+        submit_intent_ref.current = False
+        set_form_dirty(False)
+        fields = ENTITY_DEFS["project"]["fields"]
+        initial = {field["name"]: data["project"].get(field["name"], "") for field in fields}
+        set_form_values(initial)
+        set_modal_state({"open": True, "type": "edit_project", "confirm_close": False})
 
-    def handle_save_entity() -> None:
-        def do_save() -> None:
-            entity = modal_state.get("entity")
-            item_id = modal_state.get("item_id")
-            if item_id:
-                update_entity(entity, item_id, form_values)
-                set_control_feedback(f"{ENTITY_DEFS[entity]['label']} updated")
-            else:
-                insert_entity(entity, form_values)
-                set_control_feedback(f"{ENTITY_DEFS[entity]['label']} added")
-        run_mutation(do_save)
-        close_modal(force=True)
+    def open_progress_modal(selected_phase: str | None = None) -> None:
+        if busy_ref.current:
+            return
+        field_event_ts_ref.current = {}
+        submit_intent_ref.current = False
+        set_form_dirty(False)
+        progress_row = data.get("progress_row", {})
+        initial = {
+            "phase": normalize_phase(progress_row.get("phase")) or "Concept",
+            "percent": progress_row.get("percent") or 0,
+        }
+        normalized_selected_phase = normalize_phase(selected_phase)
+        if normalized_selected_phase:
+            initial["phase"] = normalized_selected_phase
+            initial["percent"] = PHASE_TO_PERCENT.get(normalized_selected_phase, initial["percent"])
+        set_form_values(initial)
+        set_modal_state({"open": True, "type": "edit_progress", "confirm_close": False})
+
+    def open_entity_modal(entity: str, mode: str, item: Dict[str, Any] | None = None) -> None:
+        if busy_ref.current:
+            return
+        field_event_ts_ref.current = {}
+        submit_intent_ref.current = False
+        set_form_dirty(False)
+        fields = ENTITY_DEFS[entity]["fields"]
+        if mode == "new":
+            initial = default_values_for(entity, fields)
+        else:
+            item = item or {}
+            initial = {field["name"]: item.get(field["name"], "") for field in fields}
+        set_form_values(initial)
+        set_modal_state(
+            {
+                "open": True,
+                "type": "new_entity" if mode == "new" else "edit_entity",
+                "entity": entity,
+                "item_id": item.get("id") if item else None,
+                "item_data": item,
+                "confirm_close": False,
+            }
+        )
+
+    def open_delete_modal(entity: str, item_id: int | None) -> None:
+        if busy_ref.current:
+            return
+        submit_intent_ref.current = False
+        set_form_dirty(False)
+        set_modal_state(
+            {
+                "open": True,
+                "type": "delete_confirm",
+                "entity": entity,
+                "item_id": item_id,
+                "confirm_close": False,
+            }
+        )
 
     def handle_delete_entity() -> None:
         def do_delete() -> None:
@@ -218,6 +379,9 @@ def App():
             delete_entity(entity, item_id)
             set_control_feedback(f"{ENTITY_DEFS[entity]['label']} deleted")
         run_mutation(do_delete)
+        submit_intent_ref.current = False
+        set_form_values({})
+        set_form_dirty(False)
         set_modal_state({"open": False, "type": None})
 
     def send_heater_command_action(kill_value: int) -> None:
@@ -229,64 +393,63 @@ def App():
             except Exception as exc:
                 _logger().exception("Failed to send heater command")
                 set_control_feedback(f"Command failed: {exc}")
-            set_telemetry(load_heater_telemetry_safe())
+            load_telemetry_snapshot()
         run_mutation(do_send, refresh_after=False)
 
     def refresh_telemetry_data() -> None:
         def do_refresh() -> None:
             set_control_feedback("")
-            set_telemetry(load_heater_telemetry_safe())
+            load_telemetry_snapshot()
         run_mutation(do_refresh, refresh_after=False)
 
-    # === RENDER FUNCTIONS ===
-
     def render_button(label: str, **kwargs) -> Dict:
-        """Generic button render"""
+        class_name = kwargs.pop("class", kwargs.pop("class_", "btn glass-btn"))
         return html.button(
             {
-                "class": kwargs.pop("class", "btn glass-btn"),
+                "class": class_name,
                 "type": kwargs.pop("type", "button"),
                 "disabled": is_busy or kwargs.pop("disabled", False),
-                **kwargs
+                **kwargs,
             },
             label,
         )
 
     def render_input_field(name: str, label: str, input_type: str = "text", **extra_attrs) -> Dict:
-        """Controlled text input"""
         return html.div(
             {"class": "field"},
             html.label({"class": "label"}, label),
             html.input(
                 {
+                    "name": name,
                     "type": input_type,
                     "class": "input glass-input",
-                    "value": get_field_value(name, ""),
+                    "default_value": get_field_value(name, ""),
                     "disabled": is_busy,
-                    "on_change": lambda e: set_field_value(name, e.get("target", {}).get("value", "")),
-                    **extra_attrs
+                    "on_change": lambda event_data: set_field_from_event(name, event_data),
+                    "on_blur": lambda event_data: set_field_from_event(name, event_data),
+                    **{key: value for key, value in extra_attrs.items() if value is not None},
                 }
             ),
         )
 
     def render_textarea_field(name: str, label: str, **extra_attrs) -> Dict:
-        """Controlled textarea"""
         return html.div(
             {"class": "field"},
             html.label({"class": "label"}, label),
             html.textarea(
                 {
+                    "name": name,
                     "class": "textarea glass-input",
-                    "value": get_field_value(name, ""),
+                    "default_value": get_field_value(name, ""),
                     "disabled": is_busy,
-                    "on_change": lambda e: set_field_value(name, e.get("target", {}).get("value", "")),
-                    **extra_attrs
+                    "on_change": lambda event_data: set_field_from_event(name, event_data),
+                    "on_blur": lambda event_data: set_field_from_event(name, event_data),
+                    **{key: value for key, value in extra_attrs.items() if value is not None},
                 }
             ),
         )
 
     def render_segmented_field(name: str, label: str, options: List[Dict[str, str]]) -> Dict:
-        """Segmented control (button group)"""
         current_val = get_field_value(name, options[0]["value"] if options else "")
         return html.div(
             {"class": "field"},
@@ -299,7 +462,7 @@ def App():
                             "type": "button",
                             "class": f"seg-btn {'active' if current_val == opt['value'] else ''}",
                             "disabled": is_busy,
-                            "on_click": lambda e, val=opt["value"]: set_field_value(name, val),
+                            "on_click": lambda e, val=opt["value"]: set_field(name, val),
                         },
                         opt["label"],
                     )
@@ -309,33 +472,34 @@ def App():
         )
 
     def render_stepper_field(name: str, label: str, min_val: int = 0, max_val: int = 100, step: int = 5) -> Dict:
-        """Numeric stepper control"""
-        current = int(get_field_value(name, min_val))
+        try:
+            current = int(get_field_value(name, min_val))
+        except (TypeError, ValueError):
+            current = min_val
         return html.div(
             {"class": "field"},
             html.label({"class": "label"}, label),
             html.div(
                 {"class": "stepper"},
-                render_button("−", 
+                render_button(
+                    "−",
                     class_="stepper-btn stepper-minus",
                     disabled=current <= min_val,
-                    on_click=lambda e: set_field_value(name, max(min_val, current - step)),
+                    on_click=lambda e: set_field(name, max(min_val, current - step)),
                 ),
                 html.span({"class": "stepper-value"}, f"{current}%"),
-                render_button("+",
+                render_button(
+                    "+",
                     class_="stepper-btn stepper-plus",
                     disabled=current >= max_val,
-                    on_click=lambda e: set_field_value(name, min(max_val, current + step)),
+                    on_click=lambda e: set_field(name, min(max_val, current + step)),
                 ),
             ),
         )
 
     def render_generic_field(entity: str, field: Dict[str, Any]) -> Dict:
-        """Dynamically render a field based on entity and field config"""
         name = field["name"]
         label = field["label"]
-        
-        # Check for segmented control fields
         if entity == "system_status" and name == "is_online":
             return render_segmented_field(name, label, [
                 {"label": "Online", "value": "1"},
@@ -372,34 +536,34 @@ def App():
         elif field.get("widget") == "textarea":
             return render_textarea_field(name, label)
         else:
-            return render_input_field(name, label, field.get("input_type", "text"), 
-                step=field.get("step") if field.get("step") else None)
+            return render_input_field(
+                name,
+                label,
+                field.get("input_type", "text"),
+                step=field.get("step"),
+            )
 
-    # Modal components
     def render_project_modal() -> Dict:
         fields = ENTITY_DEFS["project"]["fields"]
-        initial = {f["name"]: data["project"].get(f["name"], "") for f in fields}
-        if not form_values:
-            set_form_values(initial)
         return html.form(
-            {"class": "form", "on_submit": lambda e: e.preventDefault()},
+            {"class": "form", "on_submit": handle_submit},
+            html.h3({"class": "modal-subtitle"}, "Edit Project"),
             *[render_generic_field("project", f) for f in fields],
             html.div(
                 {"class": "form-actions"},
                 render_button("Cancel", class_="btn glass-btn ghost", on_click=lambda e: close_modal()),
-                render_button("Save", class_="btn glass-btn primary", on_click=lambda e: handle_save_project()),
+                render_button(
+                    "Save",
+                    class_="btn glass-btn primary",
+                    type="submit",
+                    on_click=lambda e: request_submit(),
+                ),
             ),
         )
 
     def render_progress_modal() -> Dict:
-        progress_row = data.get("progress_row", {})
-        if not form_values:
-            set_form_values({
-                "phase": normalize_phase(progress_row.get("phase")) or "Concept",
-                "percent": progress_row.get("percent") or 0,
-            })
         return html.form(
-            {"class": "form", "on_submit": lambda e: e.preventDefault()},
+            {"class": "form", "on_submit": handle_submit},
             render_stepper_field("percent", "Progress", 0, 100, 5),
             render_segmented_field("phase", "Phase", [
                 {"label": "Concept", "value": "Concept"},
@@ -411,7 +575,12 @@ def App():
             html.div(
                 {"class": "form-actions"},
                 render_button("Cancel", class_="btn glass-btn ghost", on_click=lambda e: close_modal()),
-                render_button("Save", class_="btn glass-btn primary", on_click=lambda e: handle_save_progress()),
+                render_button(
+                    "Save",
+                    class_="btn glass-btn primary",
+                    type="submit",
+                    on_click=lambda e: request_submit(),
+                ),
             ),
         )
 
@@ -419,27 +588,21 @@ def App():
         entity = modal_state.get("entity")
         entity_def = ENTITY_DEFS.get(entity, {})
         fields = entity_def.get("fields", [])
-        
-        # Initialize form if empty
-        if not form_values:
-            item_data = modal_state.get("item_data")
-            if item_data:
-                initial = {f["name"]: item_data.get(f["name"], "") for f in fields}
-            else:
-                initial = default_values_for(entity, fields)
-            set_form_values(initial)
-        
         is_edit = bool(modal_state.get("item_id"))
         title = f"{'Edit' if is_edit else 'Add'} {entity_def.get('label', entity)}"
-        
         return html.form(
-            {"class": "form", "on_submit": lambda e: e.preventDefault()},
+            {"class": "form", "on_submit": handle_submit},
             html.h3({"class": "modal-subtitle"}, title),
             *[render_generic_field(entity, f) for f in fields],
             html.div(
                 {"class": "form-actions"},
                 render_button("Cancel", class_="btn glass-btn ghost", on_click=lambda e: close_modal()),
-                render_button("Save", class_="btn glass-btn primary", on_click=lambda e: handle_save_entity()),
+                render_button(
+                    "Save",
+                    class_="btn glass-btn primary",
+                    type="submit",
+                    on_click=lambda e: request_submit(),
+                ),
             ),
         )
 
@@ -460,10 +623,8 @@ def App():
     def render_modal() -> Dict | None:
         if not modal_state.get("open"):
             return None
-        
+
         modal_type = modal_state.get("type")
-        
-        # Close confirmation
         if modal_state.get("confirm_close"):
             body = html.div(
                 {"class": "confirm-dialog"},
@@ -529,7 +690,6 @@ def App():
         system_online_class = "pill-success" if system_on is True else ("pill-danger" if system_on is False else "pill-muted")
         uptime_label = format_uptime(telemetry.get("uptime_seconds")) if system_on is True else ""
         reason = "" if telemetry_system_on is not None else system_status_row.get("reason", "")
-        
         return html.section(
             {"class": "card glass-surface glass-card"},
             html.div(
@@ -579,12 +739,10 @@ def App():
                 render_button("KILL", class_="btn glass-btn danger", on_click=lambda e: send_heater_command_action(1)),
                 render_button("UNKILL", class_="btn glass-btn", on_click=lambda e: send_heater_command_action(0)),
             ),
-            html.p({"class": "meta"}, f"Logged: {telemetry_log_sample_count()} samples"),
+            html.p({"class": "meta"}, f"Logged: {telemetry_samples} samples"),
         )
 
-    # List item rendering
     def render_list_item(entity: str, item: Dict[str, Any], index: int) -> Dict:
-        """Generic list item for tasks"""
         if entity == "tasks":
             priority_class = {"High": "high", "Medium": "medium", "Low": "low"}.get(item.get("priority"), "")
             status_class = {"Not started": "", "In progress": "in-progress", "Done": "done"}.get(item.get("status"), "")
@@ -603,16 +761,14 @@ def App():
                 html.div(
                     {"class": "item-actions"},
                     render_button("Edit", class_="btn glass-btn ghost",
-                        on_click=lambda e: open_modal("edit_entity", entity="tasks",
-                            item_id=item.get("id"), item_data=item)),
+                        on_click=lambda e: open_entity_modal("tasks", "edit", item)),
                     render_button("Delete", class_="btn glass-btn ghost danger",
-                        on_click=lambda e: open_modal("delete_confirm", entity="tasks", item_id=item.get("id"))),
+                        on_click=lambda e: open_delete_modal("tasks", item.get("id"))),
                 ),
             )
         return None
 
     def render_table_section(entity: str, rows: List[Dict[str, Any]], section_title: str) -> Dict:
-        """Generic table for BOM, Documentation, Risks"""
         if not rows:
             return html.section(
                 {"class": "card glass-surface glass-card"},
@@ -621,15 +777,14 @@ def App():
                     html.h2(section_title),
                 ),
                 html.p({"class": "meta"}, "No items yet."),
-                render_button("Add", class_="btn glass-btn", 
-                    on_click=lambda e: open_modal("new_entity", entity=entity)),
+                render_button("Add", class_="btn glass-btn", on_click=lambda e: open_entity_modal(entity, "new")),
             )
-        
+
         entity_def = ENTITY_DEFS.get(entity, {})
         fields = entity_def.get("fields", [])
         field_names = [f["name"] for f in fields]
         field_labels = {f["name"]: f["label"] for f in fields}
-        
+
         return html.section(
             {"class": "card glass-surface glass-card"},
             html.div(
@@ -655,10 +810,9 @@ def App():
                                     html.div(
                                         {"class": "action-buttons"},
                                         render_button("Edit", class_="btn glass-btn ghost",
-                                            on_click=lambda e, r=row: open_modal("edit_entity", entity=entity,
-                                                item_id=r.get("id"), item_data=r)),
+                                            on_click=lambda e, r=row: open_entity_modal(entity, "edit", r)),
                                         render_button("Delete", class_="btn glass-btn ghost danger",
-                                            on_click=lambda e, r=row: open_modal("delete_confirm", entity=entity, item_id=r.get("id"))),
+                                            on_click=lambda e, r=row: open_delete_modal(entity, r.get("id"))),
                                     ),
                                 ),
                             )
@@ -667,11 +821,9 @@ def App():
                     ),
                 ),
             ),
-            render_button("Add", class_="btn glass-btn",
-                on_click=lambda e: open_modal("new_entity", entity=entity)),
+            render_button("Add", class_="btn glass-btn", on_click=lambda e: open_entity_modal(entity, "new")),
         )
 
-    # Main render
     if data.get("error"):
         return html.div(
             {"id": "project-hub-root"},
@@ -697,8 +849,6 @@ def App():
     return html.div(
         {"id": "project-hub-root", "data-unsaved": "1" if (modal_state.get("open") and form_dirty) else "0"},
         html.style(GLASS_CSS),
-        
-        # Header
         html.header(
             {"class": "navbar glass-surface glass-navbar"},
             html.div(
@@ -712,22 +862,17 @@ def App():
             ),
             html.div(
                 {"class": "nav-actions"},
-                render_button("Edit Project", class_="btn glass-btn ghost",
-                    on_click=lambda e: open_modal("edit_project")),
+                render_button("Edit Project", class_="btn glass-btn ghost", on_click=lambda e: open_project_modal()),
             ),
         ),
-        
-        # Main content
         html.main(
             {"class": "page"},
-            
-            # Progress visualization
             html.section(
                 {"class": "card glass-surface glass-card progress-section"},
                 html.div(
                     {"class": "section-header"},
                     html.h2("Development Phase"),
-                    html.p({"class": "meta"}, "Click to change phase"),
+                    html.p({"class": "meta"}, "Click a phase to save immediately"),
                 ),
                 html.div(
                     {"class": "progress-display"},
@@ -761,8 +906,6 @@ def App():
                     ],
                 ),
             ),
-            
-            # Tasks
             html.section(
                 {"class": "card glass-surface glass-card"},
                 html.div(
@@ -775,21 +918,12 @@ def App():
                     *[render_list_item("tasks", task, idx) for idx, task in enumerate(tasks.get("bars", []))]
                     if tasks.get("bars") else [html.p({"class": "meta"}, "No tasks yet.")],
                 ),
-                render_button("Add Task", class_="btn glass-btn",
-                    on_click=lambda e: open_modal("new_entity", entity="tasks")),
+                render_button("Add Task", class_="btn glass-btn", on_click=lambda e: open_entity_modal("tasks", "new")),
             ),
-            
-            # Heater control
             render_telemetry_card(),
-            
-            # Tables: BOM, Documentation, Risks (exclude system_status)
             *[render_table_section(s["key"], s["rows"], s["title"]) for s in sections if s.get("rows") is not None and s.get("key") != "system_status"],
         ),
-        
-        # Modal
         render_modal(),
-        
-        # Status message
         (html.div(
             {"class": "toast glass-surface glass-panel"},
             html.span({"class": f"pill {'pill-success' if 'updated' in control_feedback or 'added' in control_feedback or 'deleted' in control_feedback else 'pill-info'}"}, control_feedback),
