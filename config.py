@@ -91,7 +91,6 @@ ENTITY_DEFS: Dict[str, Dict[str, Any]] = {
         "fields": [
             {"name": "title", "label": "Title", "input_type": "text"},
             {"name": "doc_type", "label": "Type", "input_type": "text"},
-            {"name": "location", "label": "Location", "input_type": "text"},
             {"name": "status", "label": "Status", "input_type": "text"},
         ],
     },

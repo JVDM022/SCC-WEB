@@ -458,12 +458,20 @@ def App():
         kill_label = "KILLED" if kill_state is True else ("ACTIVE" if kill_state is False else "Unknown")
         kill_class = "pill-danger" if kill_state is True else ("pill-success" if kill_state is False else "pill-muted")
         
+        # Get system status from sections
+        system_status_section = next((s for s in data.get("sections", []) if s.get("key") == "system_status"), None)
+        system_status_row = system_status_section.get("rows", [{}])[0] if system_status_section and system_status_section.get("rows") else {}
+        system_online = system_status_row.get("is_online")
+        system_online_label = "Online" if system_online in ["1", "true", "True"] else ("Offline" if system_online in ["0", "false", "False"] else "Unknown")
+        system_online_class = "pill-success" if system_online in ["1", "true", "True"] else ("pill-danger" if system_online in ["0", "false", "False"] else "pill-muted")
+        reason = system_status_row.get("reason", "")
+        
         return html.section(
             {"class": "card glass-surface glass-card"},
             html.div(
                 {"class": "section-header"},
-                html.h2("Heater Control"),
-                html.p({"class": "meta"}, f"Last update: {telemetry.get('fetched_at') or 'Never'}"),
+                html.h2("System & Heater Control"),
+                html.p({"class": "meta"}, f"Last telemetry: {telemetry.get('fetched_at') or 'Never'}"),
             ),
             html.div(
                 {"class": "telemetry-grid"},
@@ -479,41 +487,33 @@ def App():
                 ),
                 html.div(
                     {"class": "stat-box glass-surface glass-panel"},
-                    html.span({"class": "stat-label"}, "Status"),
+                    html.span({"class": "stat-label"}, "Kill State"),
                     html.span({"class": f"pill {kill_class}"}, kill_label),
                 ),
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "System"),
+                    html.span({"class": f"pill {system_online_class}"}, system_online_label),
+                ),
             ),
+            (html.div(
+                {"class": "status-info glass-surface glass-panel", "style": {"padding": "1rem", "margin": "1rem 0"}},
+                html.p({"class": "meta"}, f"Reason: {reason}"),
+            ) if reason else None),
             html.div(
                 {"class": "button-group"},
                 render_button("Refresh", class_="btn glass-btn", on_click=lambda e: refresh_telemetry_data()),
                 render_button("KILL", class_="btn glass-btn danger", on_click=lambda e: send_heater_command_action(1)),
                 render_button("UNKILL", class_="btn glass-btn", on_click=lambda e: send_heater_command_action(0)),
+                render_button("Edit System Status", class_="btn glass-btn ghost", on_click=lambda e: open_modal("edit_entity", entity="system_status", item_id=system_status_row.get("id"), item_data=system_status_row)),
             ),
             html.p({"class": "meta"}, f"Logged: {telemetry_log_sample_count()} samples"),
         )
 
     # List item rendering
     def render_list_item(entity: str, item: Dict[str, Any], index: int) -> Dict:
-        """Generic list item for development logs, tasks, etc."""
-        if entity == "development_log":
-            return html.div(
-                {"class": "list-item glass-surface glass-panel"},
-                html.div(
-                    {"class": "item-header"},
-                    html.h4(item.get("summary") or "Update"),
-                    html.span({"class": "meta"}, item.get("log_date") or ""),
-                ),
-                html.p(item.get("details") or ""),
-                html.div(
-                    {"class": "item-actions"},
-                    render_button("Edit", class_="btn glass-btn ghost", 
-                        on_click=lambda e: open_modal("edit_entity", entity="development_log", 
-                            item_id=item.get("id"), item_data=item)),
-                    render_button("Delete", class_="btn glass-btn ghost danger",
-                        on_click=lambda e: open_modal("delete_confirm", entity="development_log", item_id=item.get("id"))),
-                ),
-            )
-        elif entity == "tasks":
+        """Generic list item for tasks"""
+        if entity == "tasks":
             priority_class = {"High": "high", "Medium": "medium", "Low": "low"}.get(item.get("priority"), "")
             status_class = {"Not started": "", "In progress": "in-progress", "Done": "done"}.get(item.get("status"), "")
             return html.div(
@@ -618,7 +618,6 @@ def App():
 
     project = data.get("project", {})
     development = data.get("development", {})
-    logs = data.get("logs", [])
     tasks = data.get("tasks", {})
     sections = data.get("sections", [])
     progress_row = data.get("progress_row", {})
@@ -655,20 +654,20 @@ def App():
                 {"class": "card glass-surface glass-card progress-section"},
                 html.div(
                     {"class": "section-header"},
-                    html.h2("Development Progress"),
-                    html.p({"class": "meta"}, "Track phase and completion."),
+                    html.h2("Development Phase"),
+                    html.p({"class": "meta"}, "Click to change phase"),
                 ),
                 html.div(
                     {"class": "progress-display"},
                     html.div(
                         {"class": "progress-metric"},
-                        html.span({"class": "label"}, "Completion"),
-                        html.span({"class": "value"}, development.get("percent_label", "0%")),
+                        html.span({"class": "label"}, "Current Phase"),
+                        html.span({"class": "value"}, development.get("phase", "Concept")),
                     ),
                     html.div(
                         {"class": "progress-bar-container"},
                         html.div(
-                            {"class": "progress-bar", "style": {"width": f"{development.get('percent_value', 0)}%"}},
+                            {"class": "progress-bar", "style": {"width": f"{PHASE_TO_PERCENT.get(development.get('phase', 'Concept'), 0)}%"}},
                         ),
                     ),
                 ),
@@ -680,9 +679,8 @@ def App():
                                 "class": f"phase-btn {'active' if phase == development.get('phase') else ''}",
                                 "type": "button",
                                 "disabled": is_busy,
-                                "on_click": lambda e, p=phase: (
-                                    set_form_values({"phase": p, "percent": PHASE_TO_PERCENT.get(p, development.get("percent", 0))}),
-                                    open_modal("edit_progress")
+                                "on_click": lambda e, p=phase: run_mutation(
+                                    lambda: update_progress({"phase": p, "percent": PHASE_TO_PERCENT.get(p, 0)})
                                 ),
                             },
                             phase,
@@ -690,25 +688,6 @@ def App():
                         for phase in PHASES
                     ],
                 ),
-                render_button("Edit Progress", class_="btn glass-btn primary",
-                    on_click=lambda e: open_modal("edit_progress")),
-            ),
-            
-            # Development log
-            html.section(
-                {"class": "card glass-surface glass-card"},
-                html.div(
-                    {"class": "section-header"},
-                    html.h2("Development Log"),
-                    html.p({"class": "meta"}, f"{len(logs)} entries"),
-                ),
-                html.div(
-                    {"class": "list"},
-                    *[render_list_item("development_log", log, idx) for idx, log in enumerate(logs)]
-                    if logs else [html.p({"class": "meta"}, "No entries yet.")],
-                ),
-                render_button("Add Entry", class_="btn glass-btn",
-                    on_click=lambda e: open_modal("new_entity", entity="development_log")),
             ),
             
             # Tasks
