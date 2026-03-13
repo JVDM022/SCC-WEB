@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict
 
@@ -48,26 +49,81 @@ def azure_json_request(method: str, url: str, payload: Dict[str, Any] | None = N
     return body, response.status_code
 
 
+def parse_serial_telemetry_line(line: str) -> Dict[str, Any]:
+    fields: Dict[str, str] = {}
+    for part in line.split(","):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if key:
+            fields[key] = value
+
+    if "temp" not in fields:
+        match = re.search(r"\btemp(?:erature)?\s*=\s*([-+]?\d+(?:\.\d+)?)", line, flags=re.IGNORECASE)
+        if match:
+            fields["temp"] = match.group(1)
+
+    if "heat" not in fields:
+        match = re.search(r"\bheat(?:er)?\s*=\s*([A-Za-z0-9_-]+)", line, flags=re.IGNORECASE)
+        if match:
+            fields["heat"] = match.group(1)
+
+    if "kill" not in fields:
+        match = re.search(r"\bkill(?:_state|ed)?\s*=\s*([A-Za-z0-9_-]+)", line, flags=re.IGNORECASE)
+        if match:
+            fields["kill"] = match.group(1)
+
+    return {
+        "temperature": coerce_float(fields.get("temp") or fields.get("temperature")),
+        "heater_on": coerce_bool(fields.get("heat") or fields.get("heater") or fields.get("on")),
+        "kill_state": coerce_bool(fields.get("kill") or fields.get("kill_state") or fields.get("killed")),
+    }
+
+
 def load_heater_telemetry() -> Dict[str, Any]:
     url = required_env("AZ_TELEMETRY_URL")
     body, _ = azure_json_request("GET", url)
-    if not isinstance(body, dict):
-        raise RuntimeError("Telemetry response is not a JSON object")
+    parsed: Dict[str, Any] = {}
+    source_timestamp: Any = None
 
-    temperature = coerce_float(first_payload_value(body, ["temperature", "temp", "temperature_c"]))
-    heater_on = coerce_bool(first_payload_value(body, ["heater_on", "heaterOn", "heater", "on"]))
-    kill_state = coerce_bool(first_payload_value(body, ["kill", "kill_state", "killed"]))
-    source_timestamp = first_payload_value(body, ["ts", "timestamp", "fetched_at"])
+    if isinstance(body, dict):
+        temperature = coerce_float(first_payload_value(body, ["temperature", "temp", "temperature_c"]))
+        if temperature is None:
+            raw_value = first_payload_value(body, ["raw", "telemetry", "line", "message"])
+            if isinstance(raw_value, str):
+                parsed = parse_serial_telemetry_line(raw_value)
+        else:
+            parsed["temperature"] = temperature
+
+        heater_on = coerce_bool(first_payload_value(body, ["heater_on", "heaterOn", "heater", "on"]))
+        kill_state = coerce_bool(first_payload_value(body, ["kill", "kill_state", "killed"]))
+        source_timestamp = first_payload_value(body, ["ts", "timestamp", "fetched_at"])
+
+        if "temperature" not in parsed:
+            parsed["temperature"] = temperature
+        if parsed.get("heater_on") is None:
+            parsed["heater_on"] = heater_on
+        if parsed.get("kill_state") is None:
+            parsed["kill_state"] = kill_state
+    elif isinstance(body, str):
+        parsed = parse_serial_telemetry_line(body)
+        parsed.setdefault("heater_on", None)
+        parsed.setdefault("kill_state", None)
+    else:
+        raise RuntimeError("Telemetry response is not a supported format")
+
     error = ""
-    if temperature is None and source_timestamp in (0, "0", "", None):
+    if parsed.get("temperature") is None and source_timestamp in (0, "0", "", None):
         error = "No telemetry sample has been posted to the Azure relay yet"
-    elif temperature is None:
+    elif parsed.get("temperature") is None:
         error = "Azure relay returned telemetry without a temperature value"
 
     return {
-        "temperature": temperature,
-        "heater_on": heater_on,
-        "kill_state": kill_state,
+        "temperature": parsed.get("temperature"),
+        "heater_on": parsed.get("heater_on"),
+        "kill_state": parsed.get("kill_state"),
         "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source_timestamp": source_timestamp,
         "error": error,
