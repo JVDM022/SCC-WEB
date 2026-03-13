@@ -6,12 +6,16 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-def load_dotenv(path: str = ".env") -> None:
-    if not os.path.exists(path):
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def load_dotenv(path: str | Path = PROJECT_ROOT / ".env") -> None:
+    env_path = Path(path)
+    if not env_path.exists():
         return
 
     try:
-        with open(path, "r", encoding="utf-8") as env_file:
+        with env_path.open("r", encoding="utf-8") as env_file:
             for raw_line in env_file:
                 line = raw_line.strip()
                 if not line or line.startswith("#") or "=" not in line:
@@ -25,7 +29,8 @@ def load_dotenv(path: str = ".env") -> None:
         pass
 
 
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env.example")
 
 try:
     DATABASE_URL = os.environ["DATABASE_URL"]
@@ -36,7 +41,7 @@ except KeyError as exc:
 AZURE_TIMEOUT_SECONDS = float(os.environ.get("AZURE_TIMEOUT_SECONDS", "30"))
 AZURE_POOL_TIMEOUT = float(os.environ.get("AZURE_POOL_TIMEOUT", "15"))
 TELEMETRY_LOG_PATH = Path(
-    os.environ.get("TELEMETRY_LOG_PATH", str(Path.cwd() / "system_status_temperature_log.csv"))
+    os.environ.get("TELEMETRY_LOG_PATH", str(PROJECT_ROOT / "system_status_temperature_log.csv"))
 ).expanduser()
 TELEMETRY_LOG_HEADERS = [
     "timestamp",
