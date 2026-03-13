@@ -55,14 +55,19 @@ def load_heater_telemetry() -> Dict[str, Any]:
         raise RuntimeError("Telemetry response is not a JSON object")
 
     temperature = coerce_float(first_payload_value(body, ["temperature", "temp", "temperature_c"]))
-    heater_on = coerce_bool(first_payload_value(body, ["heater_on", "heaterOn", "heater"]))
+    heater_on = coerce_bool(first_payload_value(body, ["heater_on", "heaterOn", "heater", "on"]))
     kill_state = coerce_bool(first_payload_value(body, ["kill", "kill_state", "killed"]))
+    source_timestamp = first_payload_value(body, ["ts", "timestamp", "fetched_at"])
+
+    if temperature is None and source_timestamp in (0, "0", "", None):
+        raise RuntimeError("No telemetry sample has been posted to the Azure relay yet")
 
     return {
         "temperature": temperature,
         "heater_on": heater_on,
         "kill_state": kill_state,
         "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source_timestamp": source_timestamp,
     }
 
 

@@ -4,12 +4,36 @@ import { Chart } from "chart.js/auto";
 const HISTORY_WINDOW_MS = 3 * 60 * 1000;
 const POLL_INTERVAL_MS = 1000;
 
+function normalizeBoolean(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on", "online", "enabled", "active"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off", "offline", "disabled", "inactive"].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
 function normalizeTelemetry(payload) {
-  const temperature = Number(payload?.temperature ?? payload?.temp ?? 0);
-  const heaterOn = Boolean(
-    payload?.heater_on ?? payload?.heaterOn ?? payload?.heater
+  const rawTemperature = payload?.temperature ?? payload?.temp ?? payload?.temperature_c;
+  const temperature =
+    rawTemperature === null || rawTemperature === undefined || rawTemperature === ""
+      ? null
+      : Number(rawTemperature);
+  const heaterOn = normalizeBoolean(
+    payload?.heater_on ?? payload?.heaterOn ?? payload?.heater ?? payload?.on
   );
-  const kill = Boolean(payload?.kill ?? payload?.kill_state ?? payload?.killed);
+  const kill = normalizeBoolean(payload?.kill ?? payload?.kill_state ?? payload?.killed);
 
   return {
     temperature,
@@ -62,7 +86,7 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
           const now = Date.now();
           return [...prev, { timestamp: now, temperature: next.temperature }].filter(
             (point) => now - point.timestamp <= HISTORY_WINDOW_MS
-          );
+          ).filter((point) => point.temperature !== null && !Number.isNaN(point.temperature));
         });
       } catch (err) {
         if (!cancelled) {
@@ -176,7 +200,7 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
       <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
         <div style={{ border: "1px solid #d4d4d8", borderRadius: 8, padding: 12 }}>
           <strong>Temperature</strong>
-          <div>{telemetry ? `${telemetry.temperature.toFixed(1)} °C` : "--"}</div>
+          <div>{telemetry && telemetry.temperature !== null && !Number.isNaN(telemetry.temperature) ? `${telemetry.temperature.toFixed(1)} °C` : "--"}</div>
         </div>
 
         <div style={{ border: "1px solid #d4d4d8", borderRadius: 8, padding: 12 }}>
