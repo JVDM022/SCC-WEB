@@ -46,6 +46,20 @@ def empty_values(fields: List[Dict[str, Any]]) -> Dict[str, str]:
     return {field["name"]: "" for field in fields}
 
 
+def parse_online_state(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
+
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "online"}:
+        return 1
+    if text in {"0", "false", "no", "off", "offline"}:
+        return 0
+    return None
+
+
 def default_values_for(entity: str, fields: List[Dict[str, Any]]) -> Dict[str, str]:
     values = empty_values(fields)
     if entity == "development_log":
@@ -297,10 +311,56 @@ def sanitize_payload(entity: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         name = field["name"]
         value = payload.get(name, "")
         if name == "is_online":
-            data[name] = 1 if str(value).lower() in {"1", "true", "yes", "on"} else 0
+            data[name] = parse_online_state(value) or 0
         else:
             data[name] = "" if value is None else str(value).strip()
     return data
+
+
+def fetch_current_system_status() -> Dict[str, Any]:
+    row = fetch_one("SELECT * FROM system_status ORDER BY id DESC LIMIT 1")
+    if row is None:
+        return {"id": None, "is_online": None, "reason": "", "estimated_downtime": ""}
+    return row
+
+
+def sanitize_current_system_status_payload(
+    payload: Dict[str, Any],
+    current: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    current = current or {}
+    raw_online = payload.get("is_online", payload.get("status", payload.get("online")))
+    parsed_online = parse_online_state(raw_online)
+
+    if parsed_online is None:
+        parsed_online = parse_online_state(current.get("is_online"))
+
+    return {
+        "is_online": 0 if parsed_online is None else parsed_online,
+        "reason": str(payload.get("reason", current.get("reason", "")) or "").strip(),
+        "estimated_downtime": str(
+            payload.get("estimated_downtime", current.get("estimated_downtime", "")) or ""
+        ).strip(),
+    }
+
+
+def upsert_current_system_status(payload: Dict[str, Any]) -> Dict[str, Any]:
+    current = fetch_one("SELECT * FROM system_status ORDER BY id DESC LIMIT 1")
+    data = sanitize_current_system_status_payload(payload, current)
+
+    if current is None:
+        execute_sql(
+            "INSERT INTO system_status (is_online, reason, estimated_downtime) VALUES (%s, %s, %s)",
+            (data["is_online"], data["reason"], data["estimated_downtime"]),
+        )
+    else:
+        execute_sql(
+            "UPDATE system_status SET is_online = %s, reason = %s, estimated_downtime = %s WHERE id = %s",
+            (data["is_online"], data["reason"], data["estimated_downtime"], current["id"]),
+        )
+
+    get_db().commit()
+    return fetch_current_system_status()
 
 
 def insert_entity(entity: str, payload: Dict[str, Any]) -> None:

@@ -11,9 +11,11 @@ from services.dashboard import (
     delete_entity,
     entity_or_404,
     fetch_all,
+    fetch_current_system_status,
     fetch_development_progress,
     fetch_project,
     insert_entity,
+    upsert_current_system_status,
     update_entity,
     update_progress,
     update_project,
@@ -105,6 +107,17 @@ def register_api_routes(app) -> None:
             as_attachment=True,
             download_name=TELEMETRY_LOG_PATH.name,
         )
+
+    @app.route("/api/system-status/current", methods=["GET", "POST", "PUT"])
+    def api_current_system_status():
+        if request.method == "GET":
+            return jsonify(fetch_current_system_status())
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Expected a JSON object body"}), 400
+
+        return jsonify(upsert_current_system_status(payload))
 
     @app.route("/api/<entity>", methods=["GET", "POST"])
     def api_entity_collection(entity: str):

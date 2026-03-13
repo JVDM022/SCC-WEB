@@ -24,6 +24,56 @@ function normalizeBoolean(value) {
   return null;
 }
 
+function normalizeUptimeSeconds(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+  }
+
+  const raw = String(value).trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (/^\d+$/.test(raw)) {
+    return Number(raw);
+  }
+
+  let total = 0;
+  let found = false;
+  for (const match of raw.matchAll(/(\d+)\s*([dhms])/g)) {
+    found = true;
+    const amount = Number(match[1]);
+    const unit = match[2];
+    if (unit === "d") total += amount * 86400;
+    if (unit === "h") total += amount * 3600;
+    if (unit === "m") total += amount * 60;
+    if (unit === "s") total += amount;
+  }
+  return found ? total : null;
+}
+
+function formatUptime(seconds) {
+  if (seconds === null || seconds === undefined || Number.isNaN(seconds) || seconds < 0) {
+    return "";
+  }
+
+  const total = Math.floor(seconds);
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const parts = [];
+
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (minutes) parts.push(`${minutes}m`);
+  if (secs || parts.length === 0) parts.push(`${secs}s`);
+
+  return parts.join(" ");
+}
+
 function normalizeTelemetry(payload) {
   const rawTemperature = payload?.temperature ?? payload?.temp ?? payload?.temperature_c;
   const temperature =
@@ -34,11 +84,27 @@ function normalizeTelemetry(payload) {
     payload?.heater_on ?? payload?.heaterOn ?? payload?.heater ?? payload?.on
   );
   const kill = normalizeBoolean(payload?.kill ?? payload?.kill_state ?? payload?.killed);
+  let systemOn = normalizeBoolean(
+    payload?.system_on ?? payload?.systemOn ?? payload?.system ?? payload?.relay_on
+  );
+  const uptimeSeconds = normalizeUptimeSeconds(
+    payload?.uptime_seconds ?? payload?.uptime_s ?? payload?.uptime
+  );
+
+  if (systemOn === null) {
+    if (kill !== null) {
+      systemOn = !kill;
+    } else if (temperature !== null || heaterOn !== null) {
+      systemOn = true;
+    }
+  }
 
   return {
     temperature,
     heaterOn,
     kill,
+    systemOn,
+    uptimeSeconds,
   };
 }
 
@@ -212,6 +278,18 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
           <strong>Kill State</strong>
           <div>{telemetry ? (telemetry.kill ? "KILLED" : "ACTIVE") : "--"}</div>
         </div>
+
+        <div style={{ border: "1px solid #d4d4d8", borderRadius: 8, padding: 12 }}>
+          <strong>System</strong>
+          <div>{telemetry ? (telemetry.systemOn === null ? "Unknown" : telemetry.systemOn ? "ON" : "OFF") : "--"}</div>
+        </div>
+
+        {telemetry?.systemOn && telemetry?.uptimeSeconds !== null ? (
+          <div style={{ border: "1px solid #d4d4d8", borderRadius: 8, padding: 12 }}>
+            <strong>Uptime</strong>
+            <div>{formatUptime(telemetry.uptimeSeconds)}</div>
+          </div>
+        ) : null}
       </div>
 
       <div style={{ marginTop: 16, height: 280, border: "1px solid #d4d4d8", borderRadius: 8, padding: 8 }}>

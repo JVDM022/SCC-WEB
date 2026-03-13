@@ -75,11 +75,58 @@ def parse_serial_telemetry_line(line: str) -> Dict[str, Any]:
         if match:
             fields["kill"] = match.group(1)
 
+    uptime_value = fields.get("uptime") or fields.get("uptime_s") or fields.get("uptime_seconds")
+    uptime_seconds = coerce_uptime_seconds(uptime_value)
+    temperature = coerce_float(fields.get("temp") or fields.get("temperature"))
+    heater_on = coerce_bool(fields.get("heat") or fields.get("heater") or fields.get("on"))
+    kill_state = coerce_bool(fields.get("kill") or fields.get("kill_state") or fields.get("killed"))
+    system_on = coerce_bool(fields.get("system_on") or fields.get("system") or fields.get("relay_on"))
+
+    if system_on is None:
+        if kill_state is True:
+            system_on = False
+        elif kill_state is False:
+            system_on = True
+        elif heater_on is not None or temperature is not None:
+            system_on = True
+
     return {
-        "temperature": coerce_float(fields.get("temp") or fields.get("temperature")),
-        "heater_on": coerce_bool(fields.get("heat") or fields.get("heater") or fields.get("on")),
-        "kill_state": coerce_bool(fields.get("kill") or fields.get("kill_state") or fields.get("killed")),
+        "temperature": temperature,
+        "heater_on": heater_on,
+        "kill_state": kill_state,
+        "system_on": system_on,
+        "uptime_seconds": uptime_seconds,
     }
+
+
+def coerce_uptime_seconds(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+
+    total = 0
+    found = False
+    for amount, unit in re.findall(r"(\d+)\s*([dhms])", text):
+        found = True
+        count = int(amount)
+        if unit == "d":
+            total += count * 86400
+        elif unit == "h":
+            total += count * 3600
+        elif unit == "m":
+            total += count * 60
+        elif unit == "s":
+            total += count
+    return total if found else None
 
 
 def load_heater_telemetry() -> Dict[str, Any]:
@@ -99,6 +146,10 @@ def load_heater_telemetry() -> Dict[str, Any]:
 
         heater_on = coerce_bool(first_payload_value(body, ["heater_on", "heaterOn", "heater", "on"]))
         kill_state = coerce_bool(first_payload_value(body, ["kill", "kill_state", "killed"]))
+        system_on = coerce_bool(first_payload_value(body, ["system_on", "systemOn", "system", "relay_on"]))
+        uptime_seconds = coerce_uptime_seconds(
+            first_payload_value(body, ["uptime_seconds", "uptime_s", "uptime"])
+        )
         source_timestamp = first_payload_value(body, ["ts", "timestamp", "fetched_at"])
 
         if "temperature" not in parsed:
@@ -107,12 +158,26 @@ def load_heater_telemetry() -> Dict[str, Any]:
             parsed["heater_on"] = heater_on
         if parsed.get("kill_state") is None:
             parsed["kill_state"] = kill_state
+        if parsed.get("system_on") is None:
+            parsed["system_on"] = system_on
+        if parsed.get("uptime_seconds") is None:
+            parsed["uptime_seconds"] = uptime_seconds
     elif isinstance(body, str):
         parsed = parse_serial_telemetry_line(body)
         parsed.setdefault("heater_on", None)
         parsed.setdefault("kill_state", None)
+        parsed.setdefault("system_on", None)
+        parsed.setdefault("uptime_seconds", None)
     else:
         raise RuntimeError("Telemetry response is not a supported format")
+
+    if parsed.get("system_on") is None:
+        if parsed.get("kill_state") is True:
+            parsed["system_on"] = False
+        elif parsed.get("kill_state") is False:
+            parsed["system_on"] = True
+        elif parsed.get("heater_on") is not None or parsed.get("temperature") is not None:
+            parsed["system_on"] = True
 
     error = ""
     if parsed.get("temperature") is None and source_timestamp in (0, "0", "", None):
@@ -124,6 +189,8 @@ def load_heater_telemetry() -> Dict[str, Any]:
         "temperature": parsed.get("temperature"),
         "heater_on": parsed.get("heater_on"),
         "kill_state": parsed.get("kill_state"),
+        "system_on": parsed.get("system_on"),
+        "uptime_seconds": parsed.get("uptime_seconds"),
         "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source_timestamp": source_timestamp,
         "error": error,
@@ -139,6 +206,8 @@ def load_heater_telemetry_safe() -> Dict[str, Any]:
             "temperature": None,
             "heater_on": None,
             "kill_state": None,
+            "system_on": None,
+            "uptime_seconds": None,
             "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "error": str(exc),
         }

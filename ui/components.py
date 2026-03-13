@@ -53,6 +53,66 @@ APP_HEAD = (
 )
 
 
+def parse_online_state(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "online"}:
+        return True
+    if text in {"0", "false", "no", "off", "offline"}:
+        return False
+    return None
+
+
+def derive_system_on(telemetry: Dict[str, Any]) -> bool | None:
+    explicit = parse_online_state(telemetry.get("system_on"))
+    if explicit is not None:
+        return explicit
+
+    kill_state = telemetry.get("kill_state")
+    if kill_state is True:
+        return False
+    if kill_state is False:
+        return True
+
+    if telemetry.get("heater_on") is not None or telemetry.get("temperature") is not None:
+        return True
+    return None
+
+
+def format_uptime(seconds: Any) -> str:
+    try:
+        total_seconds = int(seconds)
+    except (TypeError, ValueError):
+        return ""
+
+    if total_seconds < 0:
+        return ""
+
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    parts: List[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if secs or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
 @component
 def App():
     # Data & State Management
@@ -458,13 +518,17 @@ def App():
         kill_label = "KILLED" if kill_state is True else ("ACTIVE" if kill_state is False else "Unknown")
         kill_class = "pill-danger" if kill_state is True else ("pill-success" if kill_state is False else "pill-muted")
         
-        # Get system status from sections
+        telemetry_system_on = derive_system_on(telemetry)
+
+        # Fall back to the editable database value only when telemetry has no system signal.
         system_status_section = next((s for s in data.get("sections", []) if s.get("key") == "system_status"), None)
         system_status_row = system_status_section.get("rows", [{}])[0] if system_status_section and system_status_section.get("rows") else {}
-        system_online = system_status_row.get("is_online")
-        system_online_label = "Online" if system_online in ["1", "true", "True"] else ("Offline" if system_online in ["0", "false", "False"] else "Unknown")
-        system_online_class = "pill-success" if system_online in ["1", "true", "True"] else ("pill-danger" if system_online in ["0", "false", "False"] else "pill-muted")
-        reason = system_status_row.get("reason", "")
+        fallback_system_on = parse_online_state(system_status_row.get("is_online"))
+        system_on = telemetry_system_on if telemetry_system_on is not None else fallback_system_on
+        system_online_label = "ON" if system_on is True else ("OFF" if system_on is False else "Unknown")
+        system_online_class = "pill-success" if system_on is True else ("pill-danger" if system_on is False else "pill-muted")
+        uptime_label = format_uptime(telemetry.get("uptime_seconds")) if system_on is True else ""
+        reason = "" if telemetry_system_on is not None else system_status_row.get("reason", "")
         
         return html.section(
             {"class": "card glass-surface glass-card"},
@@ -494,6 +558,15 @@ def App():
                     {"class": "stat-box glass-surface glass-panel"},
                     html.span({"class": "stat-label"}, "System"),
                     html.span({"class": f"pill {system_online_class}"}, system_online_label),
+                ),
+                (
+                    html.div(
+                        {"class": "stat-box glass-surface glass-panel"},
+                        html.span({"class": "stat-label"}, "Uptime"),
+                        html.span({"class": "stat-value"}, uptime_label),
+                    )
+                    if uptime_label
+                    else None
                 ),
             ),
             (html.div(
