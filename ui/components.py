@@ -505,7 +505,6 @@ def App():
                 render_button("Refresh", class_="btn glass-btn", on_click=lambda e: refresh_telemetry_data()),
                 render_button("KILL", class_="btn glass-btn danger", on_click=lambda e: send_heater_command_action(1)),
                 render_button("UNKILL", class_="btn glass-btn", on_click=lambda e: send_heater_command_action(0)),
-                render_button("Edit System Status", class_="btn glass-btn ghost", on_click=lambda e: open_modal("edit_entity", entity="system_status", item_id=system_status_row.get("id"), item_data=system_status_row)),
             ),
             html.p({"class": "meta"}, f"Logged: {telemetry_log_sample_count()} samples"),
         )
@@ -710,8 +709,8 @@ def App():
             # Heater control
             render_telemetry_card(),
             
-            # Tables: BOM, Documentation, Risks
-            *[render_table_section(s["key"], s["rows"], s["title"]) for s in sections if s.get("rows") is not None],
+            # Tables: BOM, Documentation, Risks (exclude system_status)
+            *[render_table_section(s["key"], s["rows"], s["title"]) for s in sections if s.get("rows") is not None and s.get("key") != "system_status"],
         ),
         
         # Modal
