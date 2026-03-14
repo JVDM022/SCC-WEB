@@ -178,6 +178,16 @@ h4 { font-size: 1rem; }
   margin: 0;
 }
 
+.link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
 /* Forms */
 .form {
   display: grid;
@@ -303,6 +313,38 @@ h4 { font-size: 1rem; }
 .action-buttons {
   display: flex;
   gap: 0.5rem;
+}
+
+.blob-upload-zone {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 1rem 1.25rem;
+  border: 2px dashed rgba(10, 132, 255, 0.28);
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+
+.blob-upload-zone:hover,
+.blob-upload-zone.dragover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.blob-upload-zone[data-upload-state="uploading"] {
+  border-color: var(--warning);
+}
+
+.blob-upload-zone[data-upload-state="error"] {
+  border-color: var(--danger);
+}
+
+.blob-upload-zone[data-upload-state="done"] {
+  border-color: var(--success);
+}
+
+.blob-upload-title {
+  font-weight: 600;
 }
 
 /* Segmented controls */

@@ -5,7 +5,9 @@ import io
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import unquote, urlparse
 
 import requests
 from flask import current_app, has_app_context
@@ -170,31 +172,48 @@ def _blob_name_for(exported_at: datetime) -> str:
     return f"broadcast_{timestamp}.csv"
 
 
-def _upload_csv(csv_text: str, exported_at: datetime) -> tuple[str, str]:
+def _service_client() -> BlobServiceClient:
     connection_string = _require_config(
         AZURE_STORAGE_CONNECTION_STRING,
         "AZURE_STORAGE_CONNECTION_STRING",
     )
-    container_name = _require_config(BROADCAST_BLOB_CONTAINER, "BROADCAST_BLOB_CONTAINER")
 
     if BlobServiceClient is None or ContentSettings is None:
         raise RuntimeError("azure-storage-blob is not installed")
 
-    service_client = BlobServiceClient.from_connection_string(connection_string)
+    return BlobServiceClient.from_connection_string(connection_string)
+
+
+def _container_client(container_name: str):
+    service_client = _service_client()
     container_client = service_client.get_container_client(container_name)
     try:
         container_client.create_container()
     except ResourceExistsError:
         pass
+    return container_client
 
-    blob_name = _blob_name_for(exported_at)
+
+def _upload_blob_bytes(data: bytes, blob_name: str, content_type: str) -> str:
+    container_name = _require_config(BROADCAST_BLOB_CONTAINER, "BROADCAST_BLOB_CONTAINER")
+    container_client = _container_client(container_name)
     blob_client = container_client.get_blob_client(blob_name)
     blob_client.upload_blob(
-        csv_text.encode("utf-8"),
+        data,
         overwrite=True,
-        content_settings=ContentSettings(content_type="text/csv; charset=utf-8"),
+        content_settings=ContentSettings(content_type=content_type),
     )
-    return blob_name, blob_client.url
+    return blob_client.url
+
+
+def _upload_csv(csv_text: str, exported_at: datetime) -> tuple[str, str]:
+    blob_name = _blob_name_for(exported_at)
+    blob_url = _upload_blob_bytes(
+        csv_text.encode("utf-8"),
+        blob_name,
+        "text/csv; charset=utf-8",
+    )
+    return blob_name, blob_url
 
 
 def _upsert_documentation_entry(blob_url: str, row_count: int, exported_at: datetime) -> None:
@@ -223,6 +242,58 @@ def _upsert_documentation_entry(blob_url: str, row_count: int, exported_at: date
     get_db().commit()
 
 
+def _insert_documentation_entry(
+    title: str,
+    doc_type: str,
+    owner: str,
+    location: str,
+    status: str,
+    exported_at: datetime,
+) -> int:
+    last_updated = exported_at.strftime("%Y-%m-%d")
+    execute_sql(
+        "INSERT INTO documentation (title, doc_type, owner, location, status, last_updated) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (title, doc_type, owner, location, status, last_updated),
+    )
+    row = fetch_one(
+        "SELECT id FROM documentation WHERE location = %s ORDER BY id DESC LIMIT 1",
+        (location,),
+    )
+    get_db().commit()
+    return int(row["id"]) if row else 0
+
+
+def _upload_name_for(filename: str, uploaded_at: datetime) -> str:
+    prefix = BROADCAST_BLOB_PATH_PREFIX.strip().strip("/")
+    timestamp = uploaded_at.strftime("%Y%m%dT%H%M%SZ")
+    safe_name = Path(filename).name or "upload.bin"
+    if prefix:
+        return f"{prefix}/uploads/{timestamp}_{safe_name}"
+    return f"uploads/{timestamp}_{safe_name}"
+
+
+def _blob_ref_from_url(location: str) -> tuple[str, str] | None:
+    if not location:
+        return None
+
+    parsed = urlparse(location)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    if "blob." not in parsed.netloc:
+        return None
+
+    path = [segment for segment in parsed.path.split("/") if segment]
+    if len(path) < 2:
+        return None
+
+    container_name = path[0]
+    blob_name = unquote("/".join(path[1:]))
+    if not container_name or not blob_name:
+        return None
+    return container_name, blob_name
+
+
 def export_broadcast_csv_to_blob() -> Dict[str, Any]:
     payload = _request_broadcast_payload()
     rows = _extract_rows(payload)
@@ -239,4 +310,66 @@ def export_broadcast_csv_to_blob() -> Dict[str, Any]:
         "blob_url": blob_url,
         "row_count": len(rows),
         "exported_at": exported_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
+def upload_documentation_file_to_blob(
+    filename: str,
+    data: bytes,
+    content_type: str,
+    title: str,
+    owner: str = "User",
+) -> Dict[str, Any]:
+    uploaded_at = datetime.now(timezone.utc)
+    blob_name = _upload_name_for(filename, uploaded_at)
+    blob_url = _upload_blob_bytes(
+        data,
+        blob_name,
+        content_type or "application/octet-stream",
+    )
+    item_id = _insert_documentation_entry(
+        title=title,
+        doc_type="Blob Upload",
+        owner=owner,
+        location=blob_url,
+        status="Uploaded",
+        exported_at=uploaded_at,
+    )
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "blob_name": blob_name,
+        "blob_url": blob_url,
+        "title": title,
+        "uploaded_at": uploaded_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
+def download_documentation_blob(item_id: int) -> Dict[str, Any]:
+    row = fetch_one(
+        "SELECT id, title, location FROM documentation WHERE id = %s",
+        (item_id,),
+    )
+    if row is None:
+        raise RuntimeError("Documentation item was not found")
+
+    location = str(row.get("location") or "").strip()
+    if not location:
+        raise RuntimeError("Documentation item has no blob location")
+
+    blob_ref = _blob_ref_from_url(location)
+    if blob_ref is None:
+        return {"mode": "redirect", "url": location}
+
+    container_name, blob_name = blob_ref
+    blob_client = _service_client().get_blob_client(container=container_name, blob=blob_name)
+    content = blob_client.download_blob().readall()
+    properties = blob_client.get_blob_properties()
+    content_type = str(properties.content_settings.content_type or "application/octet-stream")
+    download_name = Path(blob_name).name or f"{row.get('title') or 'blob'}"
+    return {
+        "mode": "download",
+        "data": content,
+        "content_type": content_type,
+        "download_name": download_name,
     }

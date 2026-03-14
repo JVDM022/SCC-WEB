@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
+from pathlib import Path
 
-from flask import jsonify, request, send_file
+from flask import jsonify, redirect, request, send_file
+from werkzeug.utils import secure_filename
 
 from config import TELEMETRY_LOG_LOCK, TELEMETRY_LOG_PATH
 from db import fetch_one
 from services.azure_relay import load_heater_telemetry_safe, send_heater_command
-from services.blob_export import export_broadcast_csv_to_blob
+from services.blob_export import (
+    download_documentation_blob,
+    export_broadcast_csv_to_blob,
+    upload_documentation_file_to_blob,
+)
 from services.dashboard import (
     delete_entity,
     entity_or_404,
@@ -117,6 +124,50 @@ def register_api_routes(app) -> None:
             app.logger.exception("Failed to export broadcast CSV to blob")
             return jsonify({"error": str(exc)}), 502
         return jsonify(result)
+
+    @app.route("/api/documentation/blob-upload", methods=["POST"])
+    def api_documentation_blob_upload():
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            return jsonify({"error": "Upload a file first"}), 400
+
+        filename = secure_filename(upload.filename) or "upload.bin"
+        title = str(request.form.get("title") or Path(filename).stem or "Blob Upload").strip()
+        owner = str(request.form.get("owner") or "User").strip() or "User"
+        data = upload.read()
+        if not data:
+            return jsonify({"error": "Uploaded file is empty"}), 400
+
+        try:
+            result = upload_documentation_file_to_blob(
+                filename=filename,
+                data=data,
+                content_type=str(upload.mimetype or "application/octet-stream"),
+                title=title,
+                owner=owner,
+            )
+        except Exception as exc:
+            app.logger.exception("Failed to upload documentation blob")
+            return jsonify({"error": str(exc)}), 502
+        return jsonify(result)
+
+    @app.route("/api/documentation/<int:item_id>/blob", methods=["GET"])
+    def api_documentation_blob_download(item_id: int):
+        try:
+            result = download_documentation_blob(item_id)
+        except Exception as exc:
+            app.logger.exception("Failed to download documentation blob")
+            return jsonify({"error": str(exc)}), 404
+
+        if result.get("mode") == "redirect":
+            return redirect(str(result["url"]))
+
+        return send_file(
+            BytesIO(result["data"]),
+            mimetype=str(result.get("content_type") or "application/octet-stream"),
+            as_attachment=True,
+            download_name=str(result.get("download_name") or "blob"),
+        )
 
     @app.route("/api/system-status/current", methods=["GET", "POST", "PUT"])
     def api_current_system_status():

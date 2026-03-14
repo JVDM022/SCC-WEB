@@ -32,6 +32,114 @@ def _logger() -> logging.Logger:
     return logging.getLogger(__name__)
 
 
+BLOB_UPLOAD_SCRIPT = """
+(function () {
+  function getDropZone() {
+    return document.getElementById("blob-upload-zone");
+  }
+
+  function getInput() {
+    return document.getElementById("blob-upload-input");
+  }
+
+  function setLabel(text) {
+    var label = document.querySelector("#blob-upload-zone [data-upload-label]");
+    if (label) {
+      label.textContent = text;
+    }
+  }
+
+  async function uploadFiles(fileList) {
+    if (!fileList || !fileList.length) {
+      return;
+    }
+
+    var file = fileList[0];
+    var dropZone = getDropZone();
+    if (!dropZone) {
+      return;
+    }
+
+    var formData = new FormData();
+    formData.append("file", file, file.name);
+    dropZone.dataset.uploadState = "uploading";
+    setLabel("Uploading " + file.name + "...");
+
+    try {
+      var response = await fetch("/api/documentation/blob-upload", {
+        method: "POST",
+        body: formData
+      });
+      var body = {};
+      try {
+        body = await response.json();
+      } catch (error) {}
+
+      if (!response.ok) {
+        throw new Error(body.error || "Upload failed");
+      }
+
+      dropZone.dataset.uploadState = "done";
+      setLabel("Upload complete. Refreshing...");
+      window.location.reload();
+    } catch (error) {
+      dropZone.dataset.uploadState = "error";
+      setLabel(error && error.message ? error.message : "Upload failed");
+    }
+  }
+
+  document.addEventListener("click", function (event) {
+    var dropZone = event.target.closest("#blob-upload-zone");
+    if (!dropZone) {
+      return;
+    }
+    var input = getInput();
+    if (input) {
+      input.click();
+    }
+  });
+
+  document.addEventListener("change", function (event) {
+    if (!event.target || event.target.id !== "blob-upload-input") {
+      return;
+    }
+    uploadFiles(event.target.files);
+    event.target.value = "";
+  });
+
+  document.addEventListener("dragover", function (event) {
+    var dropZone = event.target.closest("#blob-upload-zone");
+    if (!dropZone) {
+      return;
+    }
+    event.preventDefault();
+    dropZone.classList.add("dragover");
+  });
+
+  document.addEventListener("dragleave", function (event) {
+    var dropZone = event.target.closest("#blob-upload-zone");
+    if (!dropZone) {
+      return;
+    }
+    if (event.relatedTarget && dropZone.contains(event.relatedTarget)) {
+      return;
+    }
+    dropZone.classList.remove("dragover");
+  });
+
+  document.addEventListener("drop", function (event) {
+    var dropZone = event.target.closest("#blob-upload-zone");
+    if (!dropZone) {
+      return;
+    }
+    event.preventDefault();
+    dropZone.classList.remove("dragover");
+    uploadFiles(event.dataTransfer && event.dataTransfer.files);
+  });
+})();
+"""
+
+
 APP_HEAD = (
     {"tagName": "title", "children": ["Project Hub"]},
     {
@@ -50,6 +158,10 @@ APP_HEAD = (
             "  event.returnValue = '';"
             "});"
         ],
+    },
+    {
+        "tagName": "script",
+        "children": [BLOB_UPLOAD_SCRIPT],
     },
 )
 
@@ -795,6 +907,14 @@ def App():
         value = row.get(name, "")
         text_value = "" if value is None else str(value)
 
+        if entity == "documentation" and name == "title":
+            if row.get("location") and row.get("id"):
+                return html.a(
+                    {"class": "link documentation-link", "href": f"/api/documentation/{int(row['id'])}/blob"},
+                    text_value or "Blob",
+                )
+            return text_value
+
         if entity == "documentation" and name == "location":
             if value:
                 return html.a(
@@ -822,8 +942,32 @@ def App():
 
         return text_value
 
+    def render_blob_upload_zone() -> Dict:
+        return html.div(
+            {
+                "id": "blob-upload-zone",
+                "class": "blob-upload-zone glass-surface glass-panel",
+                "role": "button",
+                "tabIndex": "0",
+                "data-upload-state": "idle",
+            },
+            html.input(
+                {
+                    "id": "blob-upload-input",
+                    "type": "file",
+                    "style": {"display": "none"},
+                }
+            ),
+            html.div({"class": "blob-upload-title", "data-upload-label": "1"}, "Drop a file here or click to upload to Blob"),
+            html.p(
+                {"class": "meta"},
+                "The file is uploaded to Azure Blob Storage and added to Documentation automatically.",
+            ),
+        )
+
     def render_table_section(entity: str, rows: List[Dict[str, Any]], section_title: str) -> Dict:
         action_buttons = []
+        upload_zone = None
         if entity == "documentation":
             action_buttons.append(
                 render_button(
@@ -832,6 +976,7 @@ def App():
                     on_click=lambda e: export_broadcast_csv_action(),
                 )
             )
+            upload_zone = render_blob_upload_zone()
         action_buttons.append(
             render_button("Add", class_="btn glass-btn", on_click=lambda e: open_entity_modal(entity, "new"))
         )
@@ -843,6 +988,7 @@ def App():
                     {"class": "section-header"},
                     html.h2(section_title),
                 ),
+                upload_zone,
                 html.p({"class": "meta"}, "No items yet."),
                 html.div({"class": "button-group"}, *action_buttons),
             )
@@ -859,6 +1005,7 @@ def App():
                 html.h2(section_title),
                 html.div({"class": "button-group"}, *action_buttons),
             ),
+            upload_zone,
             html.div(
                 {"class": "table-wrap glass-surface glass-panel"},
                 html.table(
