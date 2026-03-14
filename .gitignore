@@ -1,4 +1,4 @@
 *.db
 *.sqlite
-.env.example
+.env
 __pycache__/
