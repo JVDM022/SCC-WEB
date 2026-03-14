@@ -7,12 +7,14 @@ from typing import Any, Dict, List
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+_FILE_SOURCED_ENV_KEYS: set[str] = set()
 
 
-def load_dotenv(path: str | Path = PROJECT_ROOT / ".env") -> None:
+def _parse_env_file(path: str | Path) -> Dict[str, str]:
     env_path = Path(path)
+    parsed: Dict[str, str] = {}
     if not env_path.exists():
-        return
+        return parsed
 
     try:
         with env_path.open("r", encoding="utf-8") as env_file:
@@ -24,9 +26,46 @@ def load_dotenv(path: str | Path = PROJECT_ROOT / ".env") -> None:
                 key = key.strip()
                 value = value.strip().strip("'").strip('"')
                 if key:
-                    os.environ.setdefault(key, value)
+                    parsed[key] = value
     except OSError:
-        pass
+        return {}
+
+    return parsed
+
+
+def load_dotenv(path: str | Path = PROJECT_ROOT / ".env") -> None:
+    parsed = _parse_env_file(path)
+    for key, value in parsed.items():
+        if key in os.environ:
+            continue
+        os.environ[key] = value
+        _FILE_SOURCED_ENV_KEYS.add(key)
+
+
+def get_env(name: str, default: str | None = None) -> str | None:
+    if name in _FILE_SOURCED_ENV_KEYS:
+        for candidate in (PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.example"):
+            parsed = _parse_env_file(candidate)
+            value = parsed.get(name)
+            if value is None:
+                continue
+            os.environ[name] = value
+            return value
+
+    current = os.environ.get(name)
+    if current is not None:
+        return current
+
+    for candidate in (PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.example"):
+        parsed = _parse_env_file(candidate)
+        value = parsed.get(name)
+        if value is None:
+            continue
+        os.environ[name] = value
+        _FILE_SOURCED_ENV_KEYS.add(name)
+        return value
+
+    return default
 
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -38,18 +77,19 @@ except KeyError as exc:
     raise RuntimeError("DATABASE_URL environment variable is required") from exc
 
 
-AZURE_TIMEOUT_SECONDS = float(os.environ.get("AZURE_TIMEOUT_SECONDS", "30"))
-AZURE_POOL_TIMEOUT = float(os.environ.get("AZURE_POOL_TIMEOUT", "15"))
-BROADCAST_SOURCE_URL_FALLBACK = os.environ.get("AZ_TELEMETRY_URL", "").strip()
-BROADCAST_ENDPOINT_URL = os.environ.get("BROADCAST_ENDPOINT_URL", "").strip()
-BROADCAST_ENDPOINT_METHOD = os.environ.get("BROADCAST_ENDPOINT_METHOD", "GET").strip().upper() or "GET"
-BROADCAST_ENDPOINT_HEADERS_JSON = os.environ.get("BROADCAST_ENDPOINT_HEADERS_JSON", "").strip()
-BROADCAST_ENDPOINT_PAYLOAD_JSON = os.environ.get("BROADCAST_ENDPOINT_PAYLOAD_JSON", "").strip()
-AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "").strip()
-BROADCAST_BLOB_CONTAINER = os.environ.get("BROADCAST_BLOB_CONTAINER", "").strip()
-BROADCAST_BLOB_PATH_PREFIX = os.environ.get("BROADCAST_BLOB_PATH_PREFIX", "broadcast").strip() or "broadcast"
+AZURE_TIMEOUT_SECONDS = float(get_env("AZURE_TIMEOUT_SECONDS", "30") or "30")
+AZURE_POOL_TIMEOUT = float(get_env("AZURE_POOL_TIMEOUT", "15") or "15")
+BROADCAST_SOURCE_URL_FALLBACK = (get_env("AZ_TELEMETRY_URL", "") or "").strip()
+BROADCAST_ENDPOINT_URL = (get_env("BROADCAST_ENDPOINT_URL", "") or "").strip()
+BROADCAST_ENDPOINT_METHOD = (get_env("BROADCAST_ENDPOINT_METHOD", "GET") or "GET").strip().upper() or "GET"
+BROADCAST_ENDPOINT_HEADERS_JSON = (get_env("BROADCAST_ENDPOINT_HEADERS_JSON", "") or "").strip()
+BROADCAST_ENDPOINT_PAYLOAD_JSON = (get_env("BROADCAST_ENDPOINT_PAYLOAD_JSON", "") or "").strip()
+AZURE_STORAGE_CONNECTION_STRING = (get_env("AZURE_STORAGE_CONNECTION_STRING", "") or "").strip()
+BROADCAST_BLOB_CONTAINER = (get_env("BROADCAST_BLOB_CONTAINER", "") or "").strip()
+BROADCAST_BLOB_PATH_PREFIX = (get_env("BROADCAST_BLOB_PATH_PREFIX", "broadcast") or "broadcast").strip() or "broadcast"
 TELEMETRY_LOG_PATH = Path(
-    os.environ.get("TELEMETRY_LOG_PATH", str(PROJECT_ROOT / "system_status_temperature_log.csv"))
+    get_env("TELEMETRY_LOG_PATH", str(PROJECT_ROOT / "system_status_temperature_log.csv"))
+    or str(PROJECT_ROOT / "system_status_temperature_log.csv")
 ).expanduser()
 TELEMETRY_LOG_HEADERS = [
     "timestamp",
@@ -58,9 +98,9 @@ TELEMETRY_LOG_HEADERS = [
     "kill_state",
 ]
 TELEMETRY_LOG_LOCK = threading.Lock()
-PORT = int(os.environ.get("PORT", "5001"))
-FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "0") == "1"
-RUN_DB_INIT = os.environ.get("RUN_DB_INIT", "0") == "1"
+PORT = int(get_env("PORT", "5001") or "5001")
+FLASK_DEBUG = (get_env("FLASK_DEBUG", "0") or "0") == "1"
+RUN_DB_INIT = (get_env("RUN_DB_INIT", "0") or "0") == "1"
 
 PHASES = ["Concept", "Developing", "Prototype", "Testing", "Complete"]
 PHASE_TO_PERCENT = {

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from datetime import datetime
 from typing import Any, Dict
+from urllib.parse import urlsplit
 
 import requests
 from flask import current_app, has_app_context
 
-from config import AZURE_TIMEOUT_SECONDS
+from config import AZURE_TIMEOUT_SECONDS, get_env
 from services.telemetry import (
     append_telemetry_log_sample,
     coerce_bool,
@@ -25,7 +25,7 @@ def _logger() -> logging.Logger:
 
 
 def required_env(name: str) -> str:
-    value = os.environ.get(name)
+    value = get_env(name)
     if not value:
         raise RuntimeError(f"{name} is not configured")
     if "<" in value and ">" in value:
@@ -33,11 +33,19 @@ def required_env(name: str) -> str:
     return value
 
 
+def describe_relay_target(url: str) -> str:
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return url
+    return f"{parts.scheme}://{parts.netloc}{parts.path or '/'}"
+
+
 def azure_json_request(method: str, url: str, payload: Dict[str, Any] | None = None) -> tuple[Any, int]:
+    target = describe_relay_target(url)
     try:
         response = requests.request(method, url, json=payload, timeout=AZURE_TIMEOUT_SECONDS)
     except requests.RequestException as exc:
-        raise RuntimeError("Azure relay is unavailable") from exc
+        raise RuntimeError(f"Azure relay is unavailable for {target}") from exc
 
     try:
         body: Any = response.json()
@@ -45,7 +53,12 @@ def azure_json_request(method: str, url: str, payload: Dict[str, Any] | None = N
         body = {"raw": response.text}
 
     if response.status_code >= 400:
-        raise RuntimeError(f"Azure relay returned {response.status_code}: {body}")
+        message = f"Azure relay returned {response.status_code} for {target}"
+        if response.status_code == 404:
+            message += ". Check the Azure Function route/key and restart the app if you recently changed .env."
+        if body not in ({}, {"raw": ""}, ""):
+            message += f": {body}"
+        raise RuntimeError(message)
     return body, response.status_code
 
 

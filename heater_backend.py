@@ -5,6 +5,7 @@ import importlib.util
 import os
 import pkgutil
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 from flask import Flask, jsonify, request
@@ -50,12 +51,14 @@ if not hasattr(pkgutil, "get_loader"):
     pkgutil.get_loader = _get_loader  # type: ignore[attr-defined]
 
 app = Flask(__name__)
+_FILE_SOURCED_ENV_KEYS: set[str] = set()
 
 
-def load_dotenv(path: str = ".env") -> None:
+def _parse_env_file(path: str) -> dict[str, str]:
     if not os.path.exists(path):
-        return
+        return {}
 
+    parsed: dict[str, str] = {}
     try:
         with open(path, "r", encoding="utf-8") as env_file:
             for raw_line in env_file:
@@ -67,37 +70,81 @@ def load_dotenv(path: str = ".env") -> None:
                 key = key.strip()
                 value = value.strip().strip("'").strip('"')
                 if key:
-                    os.environ.setdefault(key, value)
+                    parsed[key] = value
     except OSError:
         app.logger.exception("Failed to read %s", path)
+        return {}
+
+    return parsed
+
+
+def load_dotenv(path: str = ".env") -> None:
+    parsed = _parse_env_file(path)
+    for key, value in parsed.items():
+        if key in os.environ:
+            continue
+        os.environ[key] = value
+        _FILE_SOURCED_ENV_KEYS.add(key)
+
+
+def get_env(name: str, default: str | None = None) -> str | None:
+    if name in _FILE_SOURCED_ENV_KEYS:
+        for candidate in (".env", ".env.example"):
+            value = _parse_env_file(candidate).get(name)
+            if value is None:
+                continue
+            os.environ[name] = value
+            return value
+
+    current = os.environ.get(name)
+    if current is not None:
+        return current
+
+    for candidate in (".env", ".env.example"):
+        value = _parse_env_file(candidate).get(name)
+        if value is None:
+            continue
+        os.environ[name] = value
+        _FILE_SOURCED_ENV_KEYS.add(name)
+        return value
+
+    return default
 
 
 load_dotenv()
 
-AZURE_TIMEOUT_SECONDS = float(os.environ.get("AZURE_TIMEOUT_SECONDS", "5"))
+AZURE_TIMEOUT_SECONDS = float(get_env("AZURE_TIMEOUT_SECONDS", "5") or "5")
 CORS_ALLOWED_ORIGINS = {
     origin.strip()
-    for origin in os.environ.get(
+    for origin in (get_env(
         "CORS_ALLOWED_ORIGINS",
         "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173",
-    ).split(",")
+    ) or "").split(",")
     if origin.strip()
 }
 
 
 def required_env(name: str) -> str:
-    value = os.environ.get(name)
+    value = get_env(name)
     if not value:
         raise RuntimeError(f"{name} is not configured")
     return value
 
 
+def describe_relay_target(url: str) -> str:
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return url
+    return f"{parts.scheme}://{parts.netloc}{parts.path or '/'}"
+
+
 def azure_json_request(method: str, url: str, payload: dict[str, Any] | None = None) -> tuple[Any, int]:
+    target = describe_relay_target(url)
     try:
         response = requests.request(method, url, json=payload, timeout=AZURE_TIMEOUT_SECONDS)
     except requests.RequestException:
         app.logger.exception("Azure relay request failed")
-        return {"error": "Azure relay is unavailable"}, 502
+        return {"error": f"Azure relay is unavailable for {target}"}, 502
 
     try:
         body: Any = response.json()
@@ -105,8 +152,13 @@ def azure_json_request(method: str, url: str, payload: dict[str, Any] | None = N
         body = {"raw": response.text}
 
     if response.status_code >= 400:
+        error = f"Azure relay returned {response.status_code} for {target}"
+        if response.status_code == 404:
+            error += ". Check the Azure Function route/key and restart the app if you recently changed .env."
+        if body not in ({}, {"raw": ""}, ""):
+            error += f": {body}"
         return {
-            "error": "Azure relay returned an error",
+            "error": error,
             "status": response.status_code,
             "response": body,
         }, response.status_code
