@@ -68,6 +68,22 @@ def get_env(name: str, default: str | None = None) -> str | None:
     return default
 
 
+def _is_placeholder_path(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return True
+    if "<" in text and ">" in text:
+        return True
+    return text.startswith("/absolute/path/")
+
+
+def _resolved_telemetry_log_path() -> Path:
+    raw_value = (get_env("TELEMETRY_LOG_PATH", "") or "").strip()
+    if _is_placeholder_path(raw_value):
+        return (PROJECT_ROOT / "system_status_temperature_log.csv").expanduser()
+    return Path(raw_value).expanduser()
+
+
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT / ".env.example")
 
@@ -87,10 +103,7 @@ BROADCAST_ENDPOINT_PAYLOAD_JSON = (get_env("BROADCAST_ENDPOINT_PAYLOAD_JSON", ""
 AZURE_STORAGE_CONNECTION_STRING = (get_env("AZURE_STORAGE_CONNECTION_STRING", "") or "").strip()
 BROADCAST_BLOB_CONTAINER = (get_env("BROADCAST_BLOB_CONTAINER", "") or "").strip()
 BROADCAST_BLOB_PATH_PREFIX = (get_env("BROADCAST_BLOB_PATH_PREFIX", "broadcast") or "broadcast").strip() or "broadcast"
-TELEMETRY_LOG_PATH = Path(
-    get_env("TELEMETRY_LOG_PATH", str(PROJECT_ROOT / "system_status_temperature_log.csv"))
-    or str(PROJECT_ROOT / "system_status_temperature_log.csv")
-).expanduser()
+TELEMETRY_LOG_PATH = _resolved_telemetry_log_path()
 TELEMETRY_LOG_HEADERS = [
     "timestamp",
     "temperature_c",

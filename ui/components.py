@@ -247,6 +247,23 @@ def empty_telemetry_state() -> Dict[str, Any]:
     }
 
 
+def telemetry_has_signal(telemetry: Dict[str, Any]) -> bool:
+    return any(
+        telemetry.get(key) is not None
+        for key in ("temperature", "heater_on", "kill_state", "system_on", "uptime_seconds")
+    )
+
+
+def merged_telemetry_state(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
+    if telemetry_has_signal(current):
+        return current
+    if current.get("error") and telemetry_has_signal(previous):
+        merged = dict(previous)
+        merged["error"] = str(current.get("error") or "")
+        return merged
+    return current
+
+
 @component
 def App():
     data, set_data = hooks.use_state(load_dashboard_data_safe)
@@ -275,7 +292,8 @@ def App():
         set_data(load_dashboard_data_safe())
 
     def load_telemetry_snapshot() -> None:
-        set_telemetry(load_heater_telemetry_safe())
+        next_telemetry = load_heater_telemetry_safe()
+        set_telemetry(lambda previous: merged_telemetry_state(previous, next_telemetry))
         set_telemetry_samples(telemetry_log_sample_count())
 
     hooks.use_effect(load_telemetry_snapshot, [])
@@ -836,6 +854,10 @@ def App():
                 html.h2("System & Heater Control"),
                 html.p({"class": "meta"}, f"Last telemetry: {telemetry.get('fetched_at') or 'Never'}"),
             ),
+            (html.p(
+                {"class": "meta", "style": {"color": "#b42318", "marginBottom": "0.75rem"}},
+                str(telemetry.get("error") or ""),
+            ) if telemetry.get("error") else None),
             html.div(
                 {"class": "telemetry-grid"},
                 html.div(

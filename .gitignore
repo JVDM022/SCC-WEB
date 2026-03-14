@@ -2,3 +2,4 @@
 *.sqlite
 .env
 __pycache__/
+system_status_temperature_log.csv
