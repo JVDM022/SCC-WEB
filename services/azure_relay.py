@@ -24,11 +24,22 @@ def _logger() -> logging.Logger:
     return logging.getLogger(__name__)
 
 
+def _looks_like_placeholder(value: str) -> bool:
+    markers = (
+        "your-function-app",
+        "your-function-key",
+        "yourstorageaccount",
+        "your-storage-account-key",
+        "/absolute/path/",
+    )
+    return any(marker in value for marker in markers)
+
+
 def required_env(name: str) -> str:
     value = get_env(name)
     if not value:
         raise RuntimeError(f"{name} is not configured")
-    if "<" in value and ">" in value:
+    if ("<" in value and ">" in value) or _looks_like_placeholder(value):
         raise RuntimeError(f"{name} is not configured")
     return value
 

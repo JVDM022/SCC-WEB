@@ -89,7 +89,7 @@ def load_dotenv(path: str = ".env") -> None:
 
 def get_env(name: str, default: str | None = None) -> str | None:
     if name in _FILE_SOURCED_ENV_KEYS:
-        for candidate in (".env", ".env.example"):
+        for candidate in (".env",):
             value = _parse_env_file(candidate).get(name)
             if value is None:
                 continue
@@ -100,7 +100,7 @@ def get_env(name: str, default: str | None = None) -> str | None:
     if current is not None:
         return current
 
-    for candidate in (".env", ".env.example"):
+    for candidate in (".env",):
         value = _parse_env_file(candidate).get(name)
         if value is None:
             continue
@@ -127,6 +127,8 @@ CORS_ALLOWED_ORIGINS = {
 def required_env(name: str) -> str:
     value = get_env(name)
     if not value:
+        raise RuntimeError(f"{name} is not configured")
+    if any(marker in value for marker in ("your-function-app", "your-function-key", "/absolute/path/")):
         raise RuntimeError(f"{name} is not configured")
     return value
 

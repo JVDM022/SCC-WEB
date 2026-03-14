@@ -44,7 +44,7 @@ def load_dotenv(path: str | Path = PROJECT_ROOT / ".env") -> None:
 
 def get_env(name: str, default: str | None = None) -> str | None:
     if name in _FILE_SOURCED_ENV_KEYS:
-        for candidate in (PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.example"):
+        for candidate in (PROJECT_ROOT / ".env",):
             parsed = _parse_env_file(candidate)
             value = parsed.get(name)
             if value is None:
@@ -56,7 +56,7 @@ def get_env(name: str, default: str | None = None) -> str | None:
     if current is not None:
         return current
 
-    for candidate in (PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.example"):
+    for candidate in (PROJECT_ROOT / ".env",):
         parsed = _parse_env_file(candidate)
         value = parsed.get(name)
         if value is None:
@@ -85,7 +85,6 @@ def _resolved_telemetry_log_path() -> Path:
 
 
 load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT / ".env.example")
 
 try:
     DATABASE_URL = os.environ["DATABASE_URL"]
