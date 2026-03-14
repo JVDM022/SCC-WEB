@@ -7,6 +7,7 @@ from flask import jsonify, request, send_file
 from config import TELEMETRY_LOG_LOCK, TELEMETRY_LOG_PATH
 from db import fetch_one
 from services.azure_relay import load_heater_telemetry_safe, send_heater_command
+from services.blob_export import export_broadcast_csv_to_blob
 from services.dashboard import (
     delete_entity,
     entity_or_404,
@@ -107,6 +108,15 @@ def register_api_routes(app) -> None:
             as_attachment=True,
             download_name=TELEMETRY_LOG_PATH.name,
         )
+
+    @app.route("/api/documentation/blob-export", methods=["POST"])
+    def api_documentation_blob_export():
+        try:
+            result = export_broadcast_csv_to_blob()
+        except Exception as exc:
+            app.logger.exception("Failed to export broadcast CSV to blob")
+            return jsonify({"error": str(exc)}), 502
+        return jsonify(result)
 
     @app.route("/api/system-status/current", methods=["GET", "POST", "PUT"])
     def api_current_system_status():

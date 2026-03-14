@@ -8,6 +8,7 @@ from reactpy import component, event, hooks, html
 
 from config import DOC_TYPE_FILTER_ALL, ENTITY_DEFS, PHASES, PHASE_TO_PERCENT
 from services.azure_relay import load_heater_telemetry_safe, send_heater_command
+from services.blob_export import export_broadcast_csv_to_blob
 from services.dashboard import (
     bom_status_class,
     default_values_for,
@@ -111,6 +112,15 @@ def format_uptime(seconds: Any) -> str:
     if secs or not parts:
         parts.append(f"{secs}s")
     return " ".join(parts)
+
+
+def documentation_status_class(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"done", "complete", "completed"} or text.startswith("synced"):
+        return "pill-success"
+    if text in {"in progress", "in-progress", "inprogress"}:
+        return "pill-info"
+    return "pill-muted"
 
 
 def empty_telemetry_state() -> Dict[str, Any]:
@@ -402,6 +412,22 @@ def App():
             load_telemetry_snapshot()
         run_mutation(do_refresh, refresh_after=False)
 
+    def export_broadcast_csv_action() -> None:
+        def do_export() -> None:
+            set_control_feedback("")
+            try:
+                result = export_broadcast_csv_to_blob()
+            except Exception as exc:
+                _logger().exception("Failed to export broadcast CSV to blob")
+                set_control_feedback(f"Blob export failed: {exc}")
+                return
+
+            row_count = int(result.get("row_count") or 0)
+            blob_name = str(result.get("blob_name") or "blob")
+            set_control_feedback(f"Broadcast CSV exported: {row_count} rows to {blob_name}")
+
+        run_mutation(do_export)
+
     def render_button(label: str, **kwargs) -> Dict:
         class_name = kwargs.pop("class", kwargs.pop("class_", "btn glass-btn"))
         return html.button(
@@ -688,7 +714,8 @@ def App():
         system_on = telemetry_system_on if telemetry_system_on is not None else fallback_system_on
         system_online_label = "ON" if system_on is True else ("OFF" if system_on is False else "Unknown")
         system_online_class = "pill-success" if system_on is True else ("pill-danger" if system_on is False else "pill-muted")
-        uptime_label = format_uptime(telemetry.get("uptime_seconds")) if system_on is True else ""
+        uptime_seconds = telemetry.get("uptime_seconds")
+        uptime_label = format_uptime(uptime_seconds) if uptime_seconds is not None else "--"
         reason = "" if telemetry_system_on is not None else system_status_row.get("reason", "")
         return html.section(
             {"class": "card glass-surface glass-card"},
@@ -719,14 +746,10 @@ def App():
                     html.span({"class": "stat-label"}, "System"),
                     html.span({"class": f"pill {system_online_class}"}, system_online_label),
                 ),
-                (
-                    html.div(
-                        {"class": "stat-box glass-surface glass-panel"},
-                        html.span({"class": "stat-label"}, "Uptime"),
-                        html.span({"class": "stat-value"}, uptime_label),
-                    )
-                    if uptime_label
-                    else None
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Uptime"),
+                    html.span({"class": "stat-value"}, uptime_label),
                 ),
             ),
             (html.div(
@@ -768,7 +791,51 @@ def App():
             )
         return None
 
+    def render_table_cell(entity: str, name: str, row: Dict[str, Any]) -> Any:
+        value = row.get(name, "")
+        text_value = "" if value is None else str(value)
+
+        if entity == "documentation" and name == "location":
+            if value:
+                return html.a(
+                    {"class": "link", "href": str(value), "target": "_blank", "rel": "noopener"},
+                    "Open",
+                )
+            return html.span({"class": "meta"}, "No link")
+
+        if entity == "documentation" and name == "status":
+            return html.span({"class": f"pill {documentation_status_class(value)}"}, str(value or ""))
+
+        if entity == "bom" and name == "link":
+            if value:
+                return html.a(
+                    {"class": "link", "href": str(value), "target": "_blank", "rel": "noopener"},
+                    "Open",
+                )
+            return html.span({"class": "meta"}, "No link")
+
+        if entity == "bom" and name == "status":
+            return html.span({"class": f"pill {bom_status_class(value)}"}, str(value or ""))
+
+        if entity == "risks" and name == "status":
+            return html.span({"class": f"pill {risk_status_class(value)}"}, str(value or ""))
+
+        return text_value
+
     def render_table_section(entity: str, rows: List[Dict[str, Any]], section_title: str) -> Dict:
+        action_buttons = []
+        if entity == "documentation":
+            action_buttons.append(
+                render_button(
+                    "Export Broadcast CSV",
+                    class_="btn glass-btn primary",
+                    on_click=lambda e: export_broadcast_csv_action(),
+                )
+            )
+        action_buttons.append(
+            render_button("Add", class_="btn glass-btn", on_click=lambda e: open_entity_modal(entity, "new"))
+        )
+
         if not rows:
             return html.section(
                 {"class": "card glass-surface glass-card"},
@@ -777,7 +844,7 @@ def App():
                     html.h2(section_title),
                 ),
                 html.p({"class": "meta"}, "No items yet."),
-                render_button("Add", class_="btn glass-btn", on_click=lambda e: open_entity_modal(entity, "new")),
+                html.div({"class": "button-group"}, *action_buttons),
             )
 
         entity_def = ENTITY_DEFS.get(entity, {})
@@ -790,6 +857,7 @@ def App():
             html.div(
                 {"class": "section-header"},
                 html.h2(section_title),
+                html.div({"class": "button-group"}, *action_buttons),
             ),
             html.div(
                 {"class": "table-wrap glass-surface glass-panel"},
@@ -805,7 +873,7 @@ def App():
                         *[
                             html.tr(
                                 {"key": row.get("id", idx)},
-                                *[html.td(str(row.get(name, ""))) for name in field_names],
+                                *[html.td(render_table_cell(entity, name, row)) for name in field_names],
                                 html.td(
                                     html.div(
                                         {"class": "action-buttons"},
@@ -821,7 +889,6 @@ def App():
                     ),
                 ),
             ),
-            render_button("Add", class_="btn glass-btn", on_click=lambda e: open_entity_modal(entity, "new")),
         )
 
     if data.get("error"):
@@ -924,8 +991,28 @@ def App():
             *[render_table_section(s["key"], s["rows"], s["title"]) for s in sections if s.get("rows") is not None and s.get("key") != "system_status"],
         ),
         render_modal(),
-        (html.div(
-            {"class": "toast glass-surface glass-panel"},
-            html.span({"class": f"pill {'pill-success' if 'updated' in control_feedback or 'added' in control_feedback or 'deleted' in control_feedback else 'pill-info'}"}, control_feedback),
-        ) if control_feedback else None),
+        (
+            html.div(
+                {"class": "toast glass-surface glass-panel"},
+                html.span(
+                    {
+                        "class": (
+                            "pill pill-danger"
+                            if ("failed" in control_feedback.lower() or "error" in control_feedback.lower())
+                            else (
+                                "pill pill-success"
+                                if any(
+                                    keyword in control_feedback.lower()
+                                    for keyword in ("updated", "added", "deleted", "exported", "synced")
+                                )
+                                else "pill pill-info"
+                            )
+                        )
+                    },
+                    control_feedback,
+                ),
+            )
+            if control_feedback
+            else None
+        ),
     )

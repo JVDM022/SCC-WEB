@@ -40,6 +40,14 @@ except KeyError as exc:
 
 AZURE_TIMEOUT_SECONDS = float(os.environ.get("AZURE_TIMEOUT_SECONDS", "30"))
 AZURE_POOL_TIMEOUT = float(os.environ.get("AZURE_POOL_TIMEOUT", "15"))
+BROADCAST_SOURCE_URL_FALLBACK = os.environ.get("AZ_TELEMETRY_URL", "").strip()
+BROADCAST_ENDPOINT_URL = os.environ.get("BROADCAST_ENDPOINT_URL", "").strip()
+BROADCAST_ENDPOINT_METHOD = os.environ.get("BROADCAST_ENDPOINT_METHOD", "GET").strip().upper() or "GET"
+BROADCAST_ENDPOINT_HEADERS_JSON = os.environ.get("BROADCAST_ENDPOINT_HEADERS_JSON", "").strip()
+BROADCAST_ENDPOINT_PAYLOAD_JSON = os.environ.get("BROADCAST_ENDPOINT_PAYLOAD_JSON", "").strip()
+AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "").strip()
+BROADCAST_BLOB_CONTAINER = os.environ.get("BROADCAST_BLOB_CONTAINER", "").strip()
+BROADCAST_BLOB_PATH_PREFIX = os.environ.get("BROADCAST_BLOB_PATH_PREFIX", "broadcast").strip() or "broadcast"
 TELEMETRY_LOG_PATH = Path(
     os.environ.get("TELEMETRY_LOG_PATH", str(PROJECT_ROOT / "system_status_temperature_log.csv"))
 ).expanduser()
@@ -91,6 +99,8 @@ ENTITY_DEFS: Dict[str, Dict[str, Any]] = {
         "fields": [
             {"name": "title", "label": "Title", "input_type": "text"},
             {"name": "doc_type", "label": "Type", "input_type": "text"},
+            {"name": "owner", "label": "Owner", "input_type": "text"},
+            {"name": "location", "label": "Location", "input_type": "text"},
             {"name": "status", "label": "Status", "input_type": "text"},
         ],
     },
