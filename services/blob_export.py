@@ -22,8 +22,11 @@ from config import (
     BROADCAST_ENDPOINT_PAYLOAD_JSON,
     BROADCAST_ENDPOINT_URL,
     BROADCAST_SOURCE_URL_FALLBACK,
+    TELEMETRY_LOG_LOCK,
+    TELEMETRY_LOG_PATH,
 )
 from db import execute_sql, fetch_one, get_db
+from services.telemetry import ensure_telemetry_log_file
 
 try:
     from azure.core.exceptions import ResourceExistsError
@@ -216,22 +219,52 @@ def _upload_csv(csv_text: str, exported_at: datetime) -> tuple[str, str]:
     return blob_name, blob_url
 
 
+def _telemetry_log_blob_name_for(exported_at: datetime) -> str:
+    timestamp = exported_at.strftime("%Y%m%dT%H%M%SZ")
+    prefix = BROADCAST_BLOB_PATH_PREFIX.strip().strip("/")
+    if prefix:
+        return f"{prefix}/telemetry_log_{timestamp}.csv"
+    return f"telemetry_log_{timestamp}.csv"
+
+
+def _read_telemetry_log_csv() -> tuple[str, int]:
+    with TELEMETRY_LOG_LOCK:
+        ensure_telemetry_log_file()
+        try:
+            csv_text = TELEMETRY_LOG_PATH.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError("Telemetry log could not be read") from exc
+
+    row_count = sum(1 for _ in csv.DictReader(io.StringIO(csv_text)))
+    return csv_text, row_count
+
+
+def _upload_telemetry_log_csv(csv_text: str, exported_at: datetime) -> tuple[str, str]:
+    blob_name = _telemetry_log_blob_name_for(exported_at)
+    blob_url = _upload_blob_bytes(
+        csv_text.encode("utf-8"),
+        blob_name,
+        "text/csv; charset=utf-8",
+    )
+    return blob_name, blob_url
+
+
 def _upsert_documentation_entry(blob_url: str, row_count: int, exported_at: datetime) -> None:
-    title = "Broadcast CSV Export"
+    title = "Telemetry Log CSV Export"
     doc_type = "Blob"
     owner = "System"
-    status = f"Synced {row_count} rows"
+    status = f"Synced {row_count} samples"
     last_updated = exported_at.strftime("%Y-%m-%d")
     existing = fetch_one(
-        "SELECT id FROM documentation WHERE title = %s ORDER BY id DESC LIMIT 1",
-        (title,),
+        "SELECT id FROM documentation WHERE title IN (%s, %s) ORDER BY id DESC LIMIT 1",
+        (title, "Broadcast CSV Export"),
     )
 
     if existing:
         execute_sql(
-            "UPDATE documentation SET doc_type = %s, owner = %s, location = %s, status = %s, last_updated = %s "
+            "UPDATE documentation SET title = %s, doc_type = %s, owner = %s, location = %s, status = %s, last_updated = %s "
             "WHERE id = %s",
-            (doc_type, owner, blob_url, status, last_updated, existing["id"]),
+            (title, doc_type, owner, blob_url, status, last_updated, existing["id"]),
         )
     else:
         execute_sql(
@@ -295,20 +328,18 @@ def _blob_ref_from_url(location: str) -> tuple[str, str] | None:
 
 
 def export_broadcast_csv_to_blob() -> Dict[str, Any]:
-    payload = _request_broadcast_payload()
-    rows = _extract_rows(payload)
-    csv_text = _rows_to_csv(rows)
+    csv_text, row_count = _read_telemetry_log_csv()
     exported_at = datetime.now(timezone.utc)
-    blob_name, blob_url = _upload_csv(csv_text, exported_at)
+    blob_name, blob_url = _upload_telemetry_log_csv(csv_text, exported_at)
 
-    _upsert_documentation_entry(blob_url, len(rows), exported_at)
+    _upsert_documentation_entry(blob_url, row_count, exported_at)
 
-    _logger().info("Exported broadcast payload to blob %s", blob_name)
+    _logger().info("Exported telemetry log CSV to blob %s", blob_name)
     return {
         "ok": True,
         "blob_name": blob_name,
         "blob_url": blob_url,
-        "row_count": len(rows),
+        "row_count": row_count,
         "exported_at": exported_at.isoformat().replace("+00:00", "Z"),
     }
 

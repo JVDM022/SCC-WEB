@@ -548,13 +548,13 @@ def App():
             try:
                 result = export_broadcast_csv_to_blob()
             except Exception as exc:
-                _logger().exception("Failed to export broadcast CSV to blob")
+                _logger().exception("Failed to export telemetry log CSV to blob")
                 set_control_feedback(f"Blob export failed: {exc}")
                 return
 
-            row_count = int(result.get("row_count") or 0)
+            sample_count = int(result.get("row_count") or 0)
             blob_name = str(result.get("blob_name") or "blob")
-            set_control_feedback(f"Broadcast CSV exported: {row_count} rows to {blob_name}")
+            set_control_feedback(f"Telemetry log CSV exported: {sample_count} samples to {blob_name}")
 
         run_mutation(do_export)
 
@@ -993,7 +993,7 @@ def App():
         if entity == "documentation":
             action_buttons.append(
                 render_button(
-                    "Export Broadcast CSV",
+                    "Export Telemetry Log CSV",
                     class_="btn glass-btn primary",
                     on_click=lambda e: export_broadcast_csv_action(),
                 )
