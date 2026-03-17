@@ -106,7 +106,8 @@ TELEMETRY_LOG_PATH = _resolved_telemetry_log_path()
 TELEMETRY_LOG_HEADERS = [
     "timestamp",
     "temperature_c",
-    "heater_on",
+    "heat",
+    "motor",
     "kill_state",
 ]
 TELEMETRY_LOG_LOCK = threading.Lock()

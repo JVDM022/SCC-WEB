@@ -49,13 +49,46 @@ def bool_to_log_value(value: Any) -> str:
     return ""
 
 
-def ensure_telemetry_log_file() -> None:
-    TELEMETRY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if TELEMETRY_LOG_PATH.exists():
-        return
+def _normalize_telemetry_log_row(row: Dict[str, Any] | None) -> Dict[str, str]:
+    row = {} if row is None else row
+    return {
+        "timestamp": str(row.get("timestamp") or ""),
+        "temperature_c": str(
+            row.get("temperature_c") or row.get("temperature") or row.get("temp") or ""
+        ),
+        "heat": str(
+            row.get("heat") or row.get("heater_on") or row.get("heater") or ""
+        ),
+        "motor": str(
+            row.get("motor") or row.get("motor_on") or ""
+        ),
+        "kill_state": str(
+            row.get("kill_state") or row.get("kill") or row.get("killed") or ""
+        ),
+    }
+
+
+def _write_telemetry_log_rows(rows: List[Dict[str, Any]]) -> None:
     with TELEMETRY_LOG_PATH.open("w", newline="", encoding="utf-8") as log_file:
         writer = csv.DictWriter(log_file, fieldnames=TELEMETRY_LOG_HEADERS)
         writer.writeheader()
+        for row in rows:
+            writer.writerow(_normalize_telemetry_log_row(row))
+
+
+def ensure_telemetry_log_file() -> None:
+    TELEMETRY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not TELEMETRY_LOG_PATH.exists():
+        _write_telemetry_log_rows([])
+        return
+
+    with TELEMETRY_LOG_PATH.open("r", newline="", encoding="utf-8") as log_file:
+        reader = csv.DictReader(log_file)
+        if reader.fieldnames == TELEMETRY_LOG_HEADERS:
+            return
+        rows = list(reader)
+
+    _write_telemetry_log_rows(rows)
 
 
 def append_telemetry_log_sample(telemetry: Dict[str, Any]) -> None:
@@ -68,7 +101,8 @@ def append_telemetry_log_sample(telemetry: Dict[str, Any]) -> None:
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "temperature_c": f"{float(temperature):.4f}",
-        "heater_on": bool_to_log_value(telemetry.get("heater_on")),
+        "heat": bool_to_log_value(telemetry.get("heater_on")),
+        "motor": bool_to_log_value(telemetry.get("motor_on")),
         "kill_state": bool_to_log_value(telemetry.get("kill_state")),
     }
     with TELEMETRY_LOG_LOCK:

@@ -94,6 +94,11 @@ def parse_serial_telemetry_line(line: str) -> Dict[str, Any]:
         if match:
             fields["heat"] = match.group(1)
 
+    if "motor" not in fields:
+        match = re.search(r"\bmotor(?:_on)?\s*=\s*([A-Za-z0-9_-]+)", line, flags=re.IGNORECASE)
+        if match:
+            fields["motor"] = match.group(1)
+
     if "kill" not in fields:
         match = re.search(r"\bkill(?:_state|ed)?\s*=\s*([A-Za-z0-9_-]+)", line, flags=re.IGNORECASE)
         if match:
@@ -102,9 +107,12 @@ def parse_serial_telemetry_line(line: str) -> Dict[str, Any]:
     uptime_value = fields.get("uptime") or fields.get("uptime_s") or fields.get("uptime_seconds")
     uptime_seconds = coerce_uptime_seconds(uptime_value)
     temperature = coerce_float(fields.get("temp") or fields.get("temperature"))
-    heater_on = coerce_bool(fields.get("heat") or fields.get("heater") or fields.get("on"))
+    heater_on = coerce_bool(fields.get("heat") or fields.get("heater") or fields.get("heater_on"))
+    motor_on = coerce_bool(fields.get("motor") or fields.get("motor_on"))
     kill_state = coerce_bool(fields.get("kill") or fields.get("kill_state") or fields.get("killed"))
-    system_on = coerce_bool(fields.get("system_on") or fields.get("system") or fields.get("relay_on"))
+    system_on = coerce_bool(
+        fields.get("system_on") or fields.get("system") or fields.get("relay_on") or fields.get("on")
+    )
 
     if system_on is None:
         if kill_state is True:
@@ -117,6 +125,7 @@ def parse_serial_telemetry_line(line: str) -> Dict[str, Any]:
     return {
         "temperature": temperature,
         "heater_on": heater_on,
+        "motor_on": motor_on,
         "kill_state": kill_state,
         "system_on": system_on,
         "uptime_seconds": uptime_seconds,
@@ -168,9 +177,12 @@ def load_heater_telemetry() -> Dict[str, Any]:
         else:
             parsed["temperature"] = temperature
 
-        heater_on = coerce_bool(first_payload_value(body, ["heater_on", "heaterOn", "heater", "on"]))
+        heater_on = coerce_bool(first_payload_value(body, ["heat", "heater_on", "heaterOn", "heater"]))
+        motor_on = coerce_bool(first_payload_value(body, ["motor", "motor_on", "motorOn"]))
         kill_state = coerce_bool(first_payload_value(body, ["kill", "kill_state", "killed"]))
-        system_on = coerce_bool(first_payload_value(body, ["system_on", "systemOn", "system", "relay_on"]))
+        system_on = coerce_bool(
+            first_payload_value(body, ["system_on", "systemOn", "system", "relay_on", "on"])
+        )
         uptime_seconds = coerce_uptime_seconds(
             first_payload_value(body, ["uptime_seconds", "uptime_s", "uptime"])
         )
@@ -180,6 +192,8 @@ def load_heater_telemetry() -> Dict[str, Any]:
             parsed["temperature"] = temperature
         if parsed.get("heater_on") is None:
             parsed["heater_on"] = heater_on
+        if parsed.get("motor_on") is None:
+            parsed["motor_on"] = motor_on
         if parsed.get("kill_state") is None:
             parsed["kill_state"] = kill_state
         if parsed.get("system_on") is None:
@@ -189,6 +203,7 @@ def load_heater_telemetry() -> Dict[str, Any]:
     elif isinstance(body, str):
         parsed = parse_serial_telemetry_line(body)
         parsed.setdefault("heater_on", None)
+        parsed.setdefault("motor_on", None)
         parsed.setdefault("kill_state", None)
         parsed.setdefault("system_on", None)
         parsed.setdefault("uptime_seconds", None)
@@ -212,6 +227,7 @@ def load_heater_telemetry() -> Dict[str, Any]:
     return {
         "temperature": parsed.get("temperature"),
         "heater_on": parsed.get("heater_on"),
+        "motor_on": parsed.get("motor_on"),
         "kill_state": parsed.get("kill_state"),
         "system_on": parsed.get("system_on"),
         "uptime_seconds": parsed.get("uptime_seconds"),
@@ -229,6 +245,7 @@ def load_heater_telemetry_safe() -> Dict[str, Any]:
         return {
             "temperature": None,
             "heater_on": None,
+            "motor_on": None,
             "kill_state": None,
             "system_on": None,
             "uptime_seconds": None,
