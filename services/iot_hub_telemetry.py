@@ -20,9 +20,10 @@ from services.azure_relay import coerce_uptime_seconds, parse_serial_telemetry_l
 from services.telemetry import append_telemetry_log_sample, coerce_bool, coerce_float, first_payload_value
 
 try:
-    from azure.eventhub import EventHubConsumerClient
+    from azure.eventhub import EventHubConsumerClient, TransportType
 except Exception as exc:  # pragma: no cover - import depends on deployment environment
     EventHubConsumerClient = None
+    TransportType = None
     _EVENTHUB_IMPORT_ERROR = exc
 else:
     _EVENTHUB_IMPORT_ERROR = None
@@ -253,6 +254,7 @@ def _consume_forever() -> None:
             client = EventHubConsumerClient.from_connection_string(
                 conn_str=IOTHUB_EVENTHUB_CONNECTION_STRING,
                 consumer_group=IOTHUB_EVENTHUB_CONSUMER_GROUP,
+                transport_type=TransportType.AmqpOverWebsocket,
             )
             with client:
                 client.receive(
