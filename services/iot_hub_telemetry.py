@@ -5,6 +5,8 @@ import logging
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
+import tempfile
 from typing import Any, Dict
 
 from flask import current_app, has_app_context
@@ -31,6 +33,7 @@ _LATEST_TELEMETRY: Dict[str, Any] | None = None
 _LAST_CONSUMER_ERROR = ""
 _LAST_EVENT_AT = ""
 _CONSUMER_THREAD: threading.Thread | None = None
+_TELEMETRY_CACHE_PATH = Path(tempfile.gettempdir()) / "scc_iothub_latest_telemetry.json"
 
 
 def _logger() -> logging.Logger:
@@ -190,6 +193,20 @@ def _decode_payload_from_body(body_text: str) -> Any:
         return body_text
 
 
+def _write_latest_telemetry_cache(telemetry: Dict[str, Any]) -> None:
+    temp_path = _TELEMETRY_CACHE_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(telemetry), encoding="utf-8")
+    temp_path.replace(_TELEMETRY_CACHE_PATH)
+
+
+def _read_latest_telemetry_cache() -> Dict[str, Any] | None:
+    try:
+        payload = json.loads(_TELEMETRY_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _store_latest_telemetry(event: Any) -> None:
     global _LATEST_TELEMETRY, _LAST_CONSUMER_ERROR, _LAST_EVENT_AT
 
@@ -212,6 +229,11 @@ def _store_latest_telemetry(event: Any) -> None:
         _LATEST_TELEMETRY = telemetry
         _LAST_EVENT_AT = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _LAST_CONSUMER_ERROR = ""
+
+    try:
+        _write_latest_telemetry_cache(telemetry)
+    except Exception:
+        _logger().exception("Failed to write IoT Hub telemetry cache")
 
     try:
         append_telemetry_log_sample(telemetry)
@@ -296,6 +318,9 @@ def load_iot_hub_telemetry() -> Dict[str, Any]:
     with _LATEST_TELEMETRY_LOCK:
         latest = dict(_LATEST_TELEMETRY or {})
         last_error = _LAST_CONSUMER_ERROR
+
+    if not latest:
+        latest = dict(_read_latest_telemetry_cache() or {})
 
     if latest:
         latest["fetched_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
