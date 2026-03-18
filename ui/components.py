@@ -22,6 +22,7 @@ from services.dashboard import (
     update_progress,
     update_project,
 )
+from services.iot_hub import get_device_twin, iot_hub_status_summary, patch_device_ota_target
 from services.telemetry import telemetry_log_sample_count
 from ui.styles import GLASS_CSS
 
@@ -264,11 +265,87 @@ def merged_telemetry_state(previous: Dict[str, Any], current: Dict[str, Any]) ->
     return current
 
 
+def empty_iot_hub_state() -> Dict[str, Any]:
+    return {
+        "configured": False,
+        "default_device_id": "",
+        "sdk_available": True,
+        "transport": "rest",
+        "sdk_error": "",
+        "twin": None,
+        "error": "",
+    }
+
+
+def ota_form_defaults(twin: Dict[str, Any] | None = None) -> Dict[str, str]:
+    desired_ota = ((twin or {}).get("ota") or {}).get("desired") or {}
+    size = desired_ota.get("size")
+    return {
+        "target_version": str(desired_ota.get("targetVersion") or ""),
+        "artifact_url": str(desired_ota.get("artifactUrl") or ""),
+        "sha256": str(desired_ota.get("sha256") or ""),
+        "size": "" if size in (None, "") else str(size),
+        "rollout_id": str(desired_ota.get("rolloutId") or ""),
+        "action": str(desired_ota.get("action") or "download_and_apply"),
+    }
+
+
+def load_iot_hub_snapshot_safe() -> Dict[str, Any]:
+    snapshot = empty_iot_hub_state()
+    try:
+        status = iot_hub_status_summary()
+    except Exception as exc:
+        snapshot["error"] = str(exc)
+        return snapshot
+
+    snapshot.update(status)
+    if not status.get("configured"):
+        snapshot["error"] = str(status.get("sdk_error") or "")
+        return snapshot
+
+    try:
+        snapshot["twin"] = get_device_twin(status.get("default_device_id") or None)
+    except Exception as exc:
+        snapshot["error"] = str(exc)
+    return snapshot
+
+
+def format_iot_timestamp(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text.startswith("0001-01-01T00:00:00"):
+        return "--"
+    return text.replace("T", " ").replace("Z", " UTC")
+
+
+def display_value(value: Any, fallback: str = "--") -> str:
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    return text or fallback
+
+
+def iot_pill_class(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"connected", "enabled", "success", "succeeded", "complete", "completed"}:
+        return "pill-success"
+    if normalized in {"downloading", "downloaded", "rebooting", "pending_verify", "running"}:
+        return "pill-info"
+    if normalized in {"failed", "error", "disabled", "disconnected"}:
+        return "pill-danger"
+    if normalized in {"rolled_back", "warning"}:
+        return "pill-warning"
+    return "pill-muted"
+
+
 @component
 def App():
     data, set_data = hooks.use_state(load_dashboard_data_safe)
     telemetry, set_telemetry = hooks.use_state(empty_telemetry_state)
     telemetry_samples, set_telemetry_samples = hooks.use_state(lambda: 0)
+    iot_hub, set_iot_hub = hooks.use_state(load_iot_hub_snapshot_safe)
+    ota_form_values, set_ota_form_values = hooks.use_state(
+        lambda: ota_form_defaults(iot_hub.get("twin"))
+    )
     modal_state, set_modal_state = hooks.use_state({
         "open": False,
         "type": None,
@@ -297,6 +374,13 @@ def App():
         set_telemetry_samples(telemetry_log_sample_count())
 
     hooks.use_effect(load_telemetry_snapshot, [])
+
+    def load_iot_hub_snapshot(sync_form: bool = False) -> Dict[str, Any]:
+        next_snapshot = load_iot_hub_snapshot_safe()
+        set_iot_hub(next_snapshot)
+        if sync_form:
+            set_ota_form_values(ota_form_defaults(next_snapshot.get("twin")))
+        return next_snapshot
 
     def set_field(name: str, value: Any) -> None:
         if busy_ref.current:
@@ -541,6 +625,67 @@ def App():
             set_control_feedback("")
             load_telemetry_snapshot()
         run_mutation(do_refresh, refresh_after=False)
+
+    def refresh_iot_hub_data(sync_form: bool = False) -> None:
+        def do_refresh() -> None:
+            set_control_feedback("")
+            next_snapshot = load_iot_hub_snapshot(sync_form=sync_form)
+            if next_snapshot.get("error") or next_snapshot.get("sdk_error"):
+                set_control_feedback(f"IoT Hub refresh failed: {next_snapshot.get('error') or next_snapshot.get('sdk_error')}")
+            elif next_snapshot.get("configured"):
+                set_control_feedback("IoT Hub twin refreshed.")
+        run_mutation(do_refresh, refresh_after=False)
+
+    def set_ota_field(name: str, event_data: Dict[str, Any]) -> None:
+        if busy_ref.current:
+            return
+        target = event_data.get("target", {})
+        value = target.get("value", "")
+        set_ota_form_values(lambda previous: {**previous, name: "" if value is None else str(value)})
+
+    def push_ota_target_action() -> None:
+        def do_push() -> None:
+            set_control_feedback("")
+            try:
+                target_version = str(ota_form_values.get("target_version") or "").strip()
+                artifact_url = str(ota_form_values.get("artifact_url") or "").strip()
+                action = str(ota_form_values.get("action") or "download_and_apply").strip() or "download_and_apply"
+
+                if not target_version:
+                    raise RuntimeError("Target version is required")
+                if not artifact_url:
+                    raise RuntimeError("Artifact URL is required")
+
+                ota_patch: Dict[str, Any] = {
+                    "targetVersion": target_version,
+                    "artifactUrl": artifact_url,
+                    "action": action,
+                }
+
+                sha256 = str(ota_form_values.get("sha256") or "").strip()
+                if sha256:
+                    ota_patch["sha256"] = sha256
+
+                size_raw = str(ota_form_values.get("size") or "").strip()
+                if size_raw:
+                    try:
+                        ota_patch["size"] = int(size_raw)
+                    except ValueError as exc:
+                        raise RuntimeError("Size must be a whole number of bytes") from exc
+
+                rollout_id = str(ota_form_values.get("rollout_id") or "").strip()
+                if rollout_id:
+                    ota_patch["rolloutId"] = rollout_id
+
+                twin = patch_device_ota_target(ota_patch)
+                set_iot_hub(lambda previous: {**previous, "twin": twin, "error": ""})
+                set_ota_form_values(ota_form_defaults(twin))
+                set_control_feedback(f"OTA target {target_version} queued in IoT Hub.")
+            except Exception as exc:
+                _logger().exception("Failed to queue OTA target")
+                set_control_feedback(f"OTA failed: {exc}")
+
+        run_mutation(do_push, refresh_after=False)
 
     def export_broadcast_csv_action() -> None:
         def do_export() -> None:
@@ -899,6 +1044,177 @@ def App():
             html.p({"class": "meta"}, f"Logged: {telemetry_samples} samples"),
         )
 
+    def render_ota_field(name: str, label: str, placeholder: str = "", input_type: str = "text") -> Dict:
+        return html.div(
+            {"class": "field"},
+            html.label({"class": "label"}, label),
+            html.input(
+                {
+                    "type": input_type,
+                    "class": "input glass-input",
+                    "value": str(ota_form_values.get(name) or ""),
+                    "placeholder": placeholder,
+                    "disabled": is_busy or not iot_hub.get("configured"),
+                    "on_change": lambda event_data, field_name=name: set_ota_field(field_name, event_data),
+                }
+            ),
+        )
+
+    def render_iot_hub_card() -> Dict:
+        twin = iot_hub.get("twin") or {}
+        desired_ota = ((twin.get("ota") or {}).get("desired") or {})
+        reported_ota = ((twin.get("ota") or {}).get("reported") or {})
+
+        device_id = display_value(twin.get("device_id") or iot_hub.get("default_device_id"))
+        connection_state = display_value(twin.get("connection_state"), "Unknown")
+        device_status = display_value(twin.get("status"), "Unknown")
+        current_version = display_value(reported_ota.get("currentVersion"))
+        target_version = display_value(desired_ota.get("targetVersion") or reported_ota.get("targetVersion"))
+        ota_state = display_value(reported_ota.get("state"), "Pending firmware support")
+        action_value = display_value(desired_ota.get("action") or reported_ota.get("action"), "download_and_apply")
+        rollout_id = display_value(desired_ota.get("rolloutId") or reported_ota.get("rolloutId"))
+        last_activity = format_iot_timestamp(twin.get("last_activity_time"))
+        last_attempt = format_iot_timestamp(reported_ota.get("lastAttemptAt"))
+        artifact_url = str(desired_ota.get("artifactUrl") or "").strip()
+        sha256 = display_value(desired_ota.get("sha256"))
+        size_label = display_value(desired_ota.get("size"))
+
+        return html.section(
+            {"class": "card glass-surface glass-card"},
+            html.div(
+                {"class": "section-header"},
+                html.div(
+                    {},
+                    html.h2("Device Twin & OTA"),
+                    html.p({"class": "meta"}, "Azure IoT Hub desired/reported properties for the relay device."),
+                ),
+                html.div(
+                    {"class": "button-group"},
+                    render_button(
+                        "Refresh Twin",
+                        class_="btn glass-btn",
+                        on_click=lambda e: refresh_iot_hub_data(sync_form=False),
+                    ),
+                    render_button(
+                        "Load Desired OTA",
+                        class_="btn glass-btn ghost",
+                        disabled=not bool(desired_ota),
+                        on_click=lambda e: set_ota_form_values(ota_form_defaults(twin)),
+                    ),
+                ),
+            ),
+            (
+                html.p(
+                    {"class": "meta", "style": {"color": "#b42318", "marginBottom": "0.75rem"}},
+                    str(iot_hub.get("error") or iot_hub.get("sdk_error") or ""),
+                )
+                if (iot_hub.get("error") or iot_hub.get("sdk_error"))
+                else None
+            ),
+            html.div(
+                {"class": "telemetry-grid"},
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Device"),
+                    html.span({"class": "stat-value stat-value-sm"}, device_id),
+                ),
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Connection"),
+                    html.span({"class": f"pill {iot_pill_class(connection_state)}"}, connection_state),
+                ),
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Firmware"),
+                    html.span({"class": "stat-value"}, current_version),
+                ),
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Target"),
+                    html.span({"class": "stat-value"}, target_version),
+                ),
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "OTA State"),
+                    html.span({"class": f"pill {iot_pill_class(ota_state)}"}, ota_state),
+                ),
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Device Status"),
+                    html.span({"class": f"pill {iot_pill_class(device_status)}"}, device_status),
+                ),
+            ),
+            html.div(
+                {"class": "iot-detail-grid"},
+                html.div(
+                    {"class": "status-info glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Last Activity"),
+                    html.p({"class": "meta"}, last_activity),
+                ),
+                html.div(
+                    {"class": "status-info glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Last OTA Attempt"),
+                    html.p({"class": "meta"}, last_attempt),
+                ),
+                html.div(
+                    {"class": "status-info glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Rollout ID"),
+                    html.p({"class": "meta"}, rollout_id),
+                ),
+                html.div(
+                    {"class": "status-info glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "SHA-256"),
+                    html.p({"class": "meta"}, sha256),
+                ),
+            ),
+            html.div(
+                {"class": "status-info glass-surface glass-panel iot-artifact-panel"},
+                html.span({"class": "stat-label"}, "Artifact"),
+                (
+                    html.a(
+                        {"class": "link", "href": artifact_url, "target": "_blank", "rel": "noopener"},
+                        artifact_url,
+                    )
+                    if artifact_url
+                    else html.p({"class": "meta"}, "No OTA artifact queued yet.")
+                ),
+                html.p({"class": "meta"}, f"Action: {action_value}"),
+                html.p({"class": "meta"}, f"Size: {size_label}"),
+            ),
+            html.div(
+                {"class": "status-info glass-surface glass-panel"},
+                html.div(
+                    {"class": "section-header"},
+                    html.div(
+                        {},
+                        html.h3("Queue OTA Target"),
+                        html.p(
+                            {"class": "meta"},
+                            "This writes desired OTA properties to IoT Hub. The current ESP32 firmware must support twins before it will act on them.",
+                        ),
+                    ),
+                ),
+                html.div(
+                    {"class": "ota-form-grid"},
+                    render_ota_field("target_version", "Target version", "1.4.2"),
+                    render_ota_field("artifact_url", "Artifact URL", "https://storage/.../app.bin"),
+                    render_ota_field("sha256", "SHA-256", "Optional integrity hash"),
+                    render_ota_field("size", "Size (bytes)", "Optional image size", input_type="number"),
+                    render_ota_field("rollout_id", "Rollout ID", "canary-2026-03-17"),
+                    render_ota_field("action", "Action", "download_and_apply"),
+                ),
+                html.div(
+                    {"class": "button-group"},
+                    render_button(
+                        "Queue OTA",
+                        class_="btn glass-btn primary",
+                        disabled=not iot_hub.get("configured"),
+                        on_click=lambda e: push_ota_target_action(),
+                    ),
+                ),
+            ),
+        )
+
     def render_list_item(entity: str, item: Dict[str, Any], index: int) -> Dict:
         if entity == "tasks":
             priority_class = {"High": "high", "Medium": "medium", "Low": "low"}.get(item.get("priority"), "")
@@ -1157,6 +1473,7 @@ def App():
                 render_button("Add Task", class_="btn glass-btn", on_click=lambda e: open_entity_modal("tasks", "new")),
             ),
             render_telemetry_card(),
+            render_iot_hub_card(),
             *[render_table_section(s["key"], s["rows"], s["title"]) for s in sections if s.get("rows") is not None and s.get("key") != "system_status"],
         ),
         render_modal(),

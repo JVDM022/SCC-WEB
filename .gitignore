@@ -3,3 +3,5 @@
 .env
 __pycache__/
 system_status_temperature_log.csv
+release.zip
+release_web.zip

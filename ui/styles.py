@@ -630,6 +630,35 @@ h4 { font-size: 1rem; }
   color: var(--accent);
 }
 
+.stat-value-sm {
+  font-size: 1rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.status-info {
+  padding: 1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.status-info p {
+  margin: 0;
+}
+
+.iot-detail-grid,
+.ota-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.iot-artifact-panel {
+  margin-top: 1rem;
+  word-break: break-word;
+}
+
 /* Pills/Badges */
 .pill {
   display: inline-flex;
