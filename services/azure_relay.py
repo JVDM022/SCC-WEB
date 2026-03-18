@@ -78,6 +78,7 @@ _TEMPERATURE_VALUE_RE = r"[-+]?(?:\d+(?:[.,]\d+)?|\.\d+)"
 
 def _extract_labeled_temperature(line: str) -> str | None:
     patterns = (
+        rf"(?<![A-Za-z])t\s*[:=]\s*({_TEMPERATURE_VALUE_RE})(?:\s*(?:°|deg(?:rees)?)\s*[cf])?",
         rf"\btemp(?:erature)?\b\s*[:=]\s*({_TEMPERATURE_VALUE_RE})(?:\s*(?:°|deg(?:rees)?)\s*[cf])?",
         rf"\btemp(?:erature)?\b\s+({_TEMPERATURE_VALUE_RE})(?:\s*(?:°|deg(?:rees)?)\s*[cf])?",
     )
@@ -120,7 +121,7 @@ def parse_serial_telemetry_line(line: str) -> Dict[str, Any]:
 
     uptime_value = fields.get("uptime") or fields.get("uptime_s") or fields.get("uptime_seconds")
     uptime_seconds = coerce_uptime_seconds(uptime_value)
-    temperature = coerce_float(fields.get("temp") or fields.get("temperature"))
+    temperature = coerce_float(fields.get("temp") or fields.get("temperature") or fields.get("t"))
     heater_on = coerce_bool(fields.get("heat") or fields.get("heater") or fields.get("heater_on"))
     motor_on = coerce_bool(fields.get("motor") or fields.get("motor_on"))
     kill_state = coerce_bool(fields.get("kill") or fields.get("kill_state") or fields.get("killed"))
@@ -183,12 +184,12 @@ def load_heater_telemetry() -> Dict[str, Any]:
     source_timestamp: Any = None
 
     if isinstance(body, dict):
+        raw_value = first_payload_value(body, ["raw", "telemetry", "line", "message"])
+        if isinstance(raw_value, str):
+            parsed = parse_serial_telemetry_line(raw_value)
+
         temperature = coerce_float(first_payload_value(body, ["temperature", "temp", "temperature_c"]))
-        if temperature is None:
-            raw_value = first_payload_value(body, ["raw", "telemetry", "line", "message"])
-            if isinstance(raw_value, str):
-                parsed = parse_serial_telemetry_line(raw_value)
-        else:
+        if parsed.get("temperature") is None:
             parsed["temperature"] = temperature
 
         heater_on = coerce_bool(first_payload_value(body, ["heat", "heater_on", "heaterOn", "heater"]))
