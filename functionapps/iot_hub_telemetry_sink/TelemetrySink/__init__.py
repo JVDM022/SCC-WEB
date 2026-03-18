@@ -26,6 +26,22 @@ CREATE TABLE IF NOT EXISTS heater_telemetry_latest (
 )
 """
 
+HISTORY_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS heater_telemetry_history (
+    id BIGSERIAL PRIMARY KEY,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    temperature_c DOUBLE PRECISION,
+    heat INTEGER,
+    motor INTEGER,
+    kill_state INTEGER,
+    system_on INTEGER,
+    uptime_seconds INTEGER,
+    source_timestamp TEXT,
+    device_id TEXT,
+    raw_payload JSONB
+)
+"""
+
 
 def _parse_float(value: Any) -> float | None:
     if value is None or value == "" or isinstance(value, bool):
@@ -131,6 +147,7 @@ def _upsert_latest_telemetry(telemetry: Dict[str, Any]) -> None:
     with _connect_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute(SCHEMA_SQL)
+            cursor.execute(HISTORY_SCHEMA_SQL)
             cursor.execute(
                 """
                 INSERT INTO heater_telemetry_latest (
@@ -160,6 +177,33 @@ def _upsert_latest_telemetry(telemetry: Dict[str, Any]) -> None:
                 """,
                 (
                     1,
+                    telemetry.get("temperature"),
+                    _bool_to_int(telemetry.get("heater_on")),
+                    _bool_to_int(telemetry.get("motor_on")),
+                    _bool_to_int(telemetry.get("kill_state")),
+                    _bool_to_int(telemetry.get("system_on")),
+                    telemetry.get("uptime_seconds"),
+                    telemetry.get("source_timestamp"),
+                    telemetry.get("device_id"),
+                    Json(telemetry.get("raw_payload") or {}),
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO heater_telemetry_history (
+                    recorded_at,
+                    temperature_c,
+                    heat,
+                    motor,
+                    kill_state,
+                    system_on,
+                    uptime_seconds,
+                    source_timestamp,
+                    device_id,
+                    raw_payload
+                ) VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
                     telemetry.get("temperature"),
                     _bool_to_int(telemetry.get("heater_on")),
                     _bool_to_int(telemetry.get("motor_on")),

@@ -22,11 +22,9 @@ from config import (
     BROADCAST_ENDPOINT_PAYLOAD_JSON,
     BROADCAST_ENDPOINT_URL,
     BROADCAST_SOURCE_URL_FALLBACK,
-    TELEMETRY_LOG_LOCK,
-    TELEMETRY_LOG_PATH,
 )
 from db import execute_sql, fetch_one, get_db
-from services.telemetry import ensure_telemetry_log_file
+from services.telemetry import read_telemetry_log_csv
 
 try:
     from azure.core.exceptions import ResourceExistsError
@@ -228,15 +226,10 @@ def _telemetry_log_blob_name_for(exported_at: datetime) -> str:
 
 
 def _read_telemetry_log_csv() -> tuple[str, int]:
-    with TELEMETRY_LOG_LOCK:
-        ensure_telemetry_log_file()
-        try:
-            csv_text = TELEMETRY_LOG_PATH.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise RuntimeError("Telemetry log could not be read") from exc
-
-    row_count = sum(1 for _ in csv.DictReader(io.StringIO(csv_text)))
-    return csv_text, row_count
+    try:
+        return read_telemetry_log_csv()
+    except Exception as exc:
+        raise RuntimeError("Telemetry log could not be read") from exc
 
 
 def _upload_telemetry_log_csv(csv_text: str, exported_at: datetime) -> tuple[str, str]:

@@ -7,7 +7,6 @@ from pathlib import Path
 from flask import jsonify, redirect, request, send_file
 from werkzeug.utils import secure_filename
 
-from config import TELEMETRY_LOG_LOCK, TELEMETRY_LOG_PATH
 from db import fetch_one
 from services.heater_telemetry_source import load_heater_telemetry_safe, send_heater_command
 from services.blob_export import (
@@ -37,7 +36,7 @@ from services.iot_hub import (
     schedule_ota_rollout,
 )
 from services.iot_hub_telemetry import iot_hub_telemetry_status_summary
-from services.telemetry import ensure_telemetry_log_file, telemetry_log_sample_count
+from services.telemetry import read_telemetry_log_csv, telemetry_log_sample_count
 
 
 def register_api_routes(app) -> None:
@@ -213,13 +212,16 @@ def register_api_routes(app) -> None:
 
     @app.route("/api/system-status/telemetry-log.csv", methods=["GET"])
     def api_telemetry_log_csv():
-        with TELEMETRY_LOG_LOCK:
-            ensure_telemetry_log_file()
-        return send_file(
-            TELEMETRY_LOG_PATH,
+        try:
+            csv_text, _row_count = read_telemetry_log_csv()
+        except Exception as exc:
+            app.logger.exception("Failed to build telemetry CSV")
+            return jsonify({"error": str(exc)}), 502
+
+        return app.response_class(
+            csv_text,
             mimetype="text/csv",
-            as_attachment=True,
-            download_name=TELEMETRY_LOG_PATH.name,
+            headers={"Content-Disposition": 'attachment; filename="system_status_temperature_log.csv"'},
         )
 
     @app.route("/api/documentation/blob-export", methods=["POST"])

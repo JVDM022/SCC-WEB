@@ -104,6 +104,21 @@ def init_db(db) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS heater_telemetry_history (
+            id BIGSERIAL PRIMARY KEY,
+            recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            temperature_c DOUBLE PRECISION,
+            heat INTEGER,
+            motor INTEGER,
+            kill_state INTEGER,
+            system_on INTEGER,
+            uptime_seconds INTEGER,
+            source_timestamp TEXT,
+            device_id TEXT,
+            raw_payload JSONB
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS card_state (
             key TEXT PRIMARY KEY,
             position INTEGER,

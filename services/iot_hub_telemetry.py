@@ -17,7 +17,7 @@ from config import (
     IOTHUB_EVENTHUB_CONSUMER_GROUP,
 )
 from services.azure_relay import coerce_uptime_seconds, parse_serial_telemetry_line
-from services.telemetry import append_telemetry_log_sample, coerce_bool, coerce_float, first_payload_value
+from services.telemetry import coerce_bool, coerce_float, first_payload_value
 
 try:
     from azure.eventhub import EventHubConsumerClient, TransportType
@@ -235,11 +235,6 @@ def _store_latest_telemetry(event: Any) -> None:
         _write_latest_telemetry_cache(telemetry)
     except Exception:
         _logger().exception("Failed to write IoT Hub telemetry cache")
-
-    try:
-        append_telemetry_log_sample(telemetry)
-    except Exception:
-        _logger().exception("Failed to append IoT Hub telemetry log sample")
 
 
 def _on_event(partition_context: Any, event: Any) -> None:
