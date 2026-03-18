@@ -25,6 +25,7 @@ from services.dashboard import (
 )
 from services.iot_hub import get_device_twin, iot_hub_status_summary, patch_device_ota_target
 from services.iot_hub_telemetry import iot_hub_telemetry_status_summary
+from services.pacific_time import format_pacific_timestamp
 from services.telemetry import coerce_float, telemetry_log_sample_count
 from ui.styles import GLASS_CSS
 
@@ -323,10 +324,7 @@ def load_iot_hub_snapshot_safe() -> Dict[str, Any]:
 
 
 def format_iot_timestamp(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text or text.startswith("0001-01-01T00:00:00"):
-        return "--"
-    return text.replace("T", " ").replace("Z", " UTC")
+    return format_pacific_timestamp(value, "--")
 
 
 def display_value(value: Any, fallback: str = "--") -> str:

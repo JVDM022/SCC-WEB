@@ -3,6 +3,27 @@ import { Chart } from "chart.js/auto";
 
 const HISTORY_WINDOW_MS = 3 * 60 * 1000;
 const POLL_INTERVAL_MS = 1000;
+const PACIFIC_TIME_ZONE = "America/Los_Angeles";
+
+const PACIFIC_TIME_LABEL = new Intl.DateTimeFormat("en-US", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  timeZone: PACIFIC_TIME_ZONE,
+});
+
+const PACIFIC_TOOLTIP_LABEL = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  timeZone: PACIFIC_TIME_ZONE,
+  timeZoneName: "short",
+});
 
 function normalizeBoolean(value) {
   if (value === null || value === undefined || value === "") {
@@ -220,9 +241,7 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
       return;
     }
 
-    const labels = history.map((point) =>
-      new Date(point.timestamp).toLocaleTimeString([], { hour12: false })
-    );
+    const labels = history.map((point) => PACIFIC_TIME_LABEL.format(new Date(point.timestamp)));
     const values = history.map((point) => point.temperature);
 
     if (!chartRef.current) {
@@ -246,6 +265,19 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
           responsive: true,
           maintainAspectRatio: false,
           animation: false,
+          plugins: {
+            tooltip: {
+              callbacks: {
+                title(items) {
+                  const point = history[items[0]?.dataIndex ?? -1];
+                  if (!point) {
+                    return "";
+                  }
+                  return PACIFIC_TOOLTIP_LABEL.format(new Date(point.timestamp));
+                },
+              },
+            },
+          },
           scales: {
             x: {
               ticks: { maxTicksLimit: 10 },
@@ -261,6 +293,13 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
 
     chartRef.current.data.labels = labels;
     chartRef.current.data.datasets[0].data = values;
+    chartRef.current.options.plugins.tooltip.callbacks.title = (items) => {
+      const point = history[items[0]?.dataIndex ?? -1];
+      if (!point) {
+        return "";
+      }
+      return PACIFIC_TOOLTIP_LABEL.format(new Date(point.timestamp));
+    };
     chartRef.current.update();
   }, [history]);
 

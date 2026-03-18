@@ -4,7 +4,6 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 import tempfile
 from typing import Any, Dict
@@ -16,6 +15,7 @@ from config import (
     IOTHUB_EVENTHUB_CONNECTION_STRING,
     IOTHUB_EVENTHUB_CONSUMER_GROUP,
 )
+from services.pacific_time import format_pacific_timestamp, pacific_now
 from services.azure_relay import coerce_uptime_seconds, parse_serial_telemetry_line
 from services.telemetry import coerce_bool, coerce_float, first_payload_value
 
@@ -178,7 +178,7 @@ def _normalize_iot_hub_payload(body: Any, *, fallback_source_timestamp: Any = No
         "kill_state": parsed.get("kill_state"),
         "system_on": parsed.get("system_on"),
         "uptime_seconds": parsed.get("uptime_seconds"),
-        "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "fetched_at": format_pacific_timestamp(pacific_now()),
         "source_timestamp": source_timestamp,
         "error": error,
     }
@@ -228,7 +228,7 @@ def _store_latest_telemetry(event: Any) -> None:
 
     with _LATEST_TELEMETRY_LOCK:
         _LATEST_TELEMETRY = telemetry
-        _LAST_EVENT_AT = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _LAST_EVENT_AT = format_pacific_timestamp(pacific_now())
         _LAST_CONSUMER_ERROR = ""
 
     try:
@@ -320,7 +320,7 @@ def load_iot_hub_telemetry() -> Dict[str, Any]:
         latest = dict(_read_latest_telemetry_cache() or {})
 
     if latest:
-        latest["fetched_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        latest["fetched_at"] = format_pacific_timestamp(pacific_now())
         latest["error"] = str(latest.get("error") or "")
         return latest
 
@@ -343,7 +343,7 @@ def load_iot_hub_telemetry_safe() -> Dict[str, Any]:
             "kill_state": None,
             "system_on": None,
             "uptime_seconds": None,
-            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "fetched_at": format_pacific_timestamp(pacific_now()),
             "source_timestamp": None,
             "error": message,
         }

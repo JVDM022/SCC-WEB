@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 from config import TELEMETRY_LOG_HEADERS, TELEMETRY_LOG_PATH
 from db import get_db_pool
 from psycopg2.extras import Json, RealDictCursor
+from services.pacific_time import format_pacific_timestamp
 
 
 _FLOAT_TOKEN_RE = re.compile(r"[-+]?(?:\d+(?:[.,]\d+)?|\.\d+)")
@@ -158,13 +159,8 @@ def _normalize_history_row(telemetry: Dict[str, Any], *, recorded_at: Any = None
 
 
 def _csv_row_from_history(row: Dict[str, Any]) -> Dict[str, str]:
-    recorded_at = row.get("recorded_at")
-    if hasattr(recorded_at, "isoformat"):
-        timestamp = recorded_at.isoformat(timespec="seconds")
-    else:
-        timestamp = str(recorded_at or "")
     return {
-        "timestamp": timestamp,
+        "timestamp": format_pacific_timestamp(row.get("recorded_at")),
         "temperature_c": "" if row.get("temperature_c") is None else f"{float(row['temperature_c']):.4f}",
         "heat": bool_to_log_value(row.get("heat")),
         "motor": bool_to_log_value(row.get("motor")),

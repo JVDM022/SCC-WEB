@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
 from typing import Any, Dict
 from urllib.parse import urlsplit
 
@@ -10,6 +9,7 @@ import requests
 from flask import current_app, has_app_context
 
 from config import AZURE_TIMEOUT_SECONDS, get_env
+from services.pacific_time import format_pacific_timestamp, pacific_now
 from services.telemetry import (
     append_telemetry_log_sample,
     coerce_bool,
@@ -246,7 +246,7 @@ def load_heater_telemetry() -> Dict[str, Any]:
         "kill_state": parsed.get("kill_state"),
         "system_on": parsed.get("system_on"),
         "uptime_seconds": parsed.get("uptime_seconds"),
-        "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "fetched_at": format_pacific_timestamp(pacific_now()),
         "source_timestamp": source_timestamp,
         "error": error,
     }
@@ -264,7 +264,7 @@ def load_heater_telemetry_safe() -> Dict[str, Any]:
             "kill_state": None,
             "system_on": None,
             "uptime_seconds": None,
-            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "fetched_at": format_pacific_timestamp(pacific_now()),
             "error": str(exc),
         }
     try:

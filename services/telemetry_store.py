@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime
 from typing import Any, Callable, Dict
 
 from psycopg2.extras import Json, RealDictCursor
 
 from db import get_db_pool
 from services.azure_relay import coerce_uptime_seconds
+from services.pacific_time import format_pacific_timestamp, pacific_now
 from services.telemetry import coerce_bool, coerce_float
 
 
@@ -74,12 +74,8 @@ def _bool_to_int(value: Any) -> int | None:
 
 def _row_to_telemetry(row: Dict[str, Any]) -> Dict[str, Any]:
     updated_at = row.get("updated_at")
-    fetched_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    stored_at = (
-        updated_at.strftime("%Y-%m-%d %H:%M:%S")
-        if hasattr(updated_at, "strftime")
-        else str(updated_at or "")
-    )
+    fetched_at = format_pacific_timestamp(pacific_now())
+    stored_at = format_pacific_timestamp(updated_at)
 
     return {
         "temperature": coerce_float(row.get("temperature_c")),
@@ -176,6 +172,6 @@ def load_latest_telemetry_safe() -> Dict[str, Any]:
             "source_timestamp": None,
             "device_id": "",
             "stored_at": "",
-            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "fetched_at": format_pacific_timestamp(pacific_now()),
             "error": str(exc),
         }
