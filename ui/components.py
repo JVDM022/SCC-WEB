@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Callable, Dict, List
 
@@ -139,6 +140,8 @@ BLOB_UPLOAD_SCRIPT = """
   });
 })();
 """
+
+TELEMETRY_POLL_SECONDS = 3.0
 
 
 APP_HEAD = (
@@ -374,12 +377,25 @@ def App():
     def refresh_dashboard() -> None:
         set_data(load_dashboard_data_safe())
 
-    def load_telemetry_snapshot() -> None:
+    def read_telemetry_snapshot() -> tuple[Dict[str, Any], int]:
         next_telemetry = normalize_telemetry_state(load_heater_telemetry_safe())
-        set_telemetry(lambda previous: merged_telemetry_state(previous, next_telemetry))
-        set_telemetry_samples(telemetry_log_sample_count())
+        return next_telemetry, telemetry_log_sample_count()
 
-    hooks.use_effect(load_telemetry_snapshot, [])
+    def apply_telemetry_snapshot(next_telemetry: Dict[str, Any], sample_count: int) -> None:
+        set_telemetry(lambda previous: merged_telemetry_state(previous, next_telemetry))
+        set_telemetry_samples(sample_count)
+
+    def load_telemetry_snapshot() -> None:
+        next_telemetry, sample_count = read_telemetry_snapshot()
+        apply_telemetry_snapshot(next_telemetry, sample_count)
+
+    async def poll_telemetry_effect():
+        while True:
+            next_telemetry, sample_count = await asyncio.to_thread(read_telemetry_snapshot)
+            apply_telemetry_snapshot(next_telemetry, sample_count)
+            await asyncio.sleep(TELEMETRY_POLL_SECONDS)
+
+    hooks.use_effect(poll_telemetry_effect, [])
 
     def load_iot_hub_snapshot(sync_form: bool = False) -> Dict[str, Any]:
         next_snapshot = load_iot_hub_snapshot_safe()
