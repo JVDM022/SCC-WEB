@@ -9,7 +9,7 @@ from werkzeug.utils import secure_filename
 
 from config import TELEMETRY_LOG_LOCK, TELEMETRY_LOG_PATH
 from db import fetch_one
-from services.azure_relay import load_heater_telemetry_safe, send_heater_command
+from services.heater_telemetry_source import load_heater_telemetry_safe, send_heater_command
 from services.blob_export import (
     download_documentation_blob,
     export_broadcast_csv_to_blob,
@@ -36,6 +36,7 @@ from services.iot_hub import (
     patch_device_ota_target,
     schedule_ota_rollout,
 )
+from services.iot_hub_telemetry import iot_hub_telemetry_status_summary
 from services.telemetry import ensure_telemetry_log_file, telemetry_log_sample_count
 
 
@@ -114,7 +115,9 @@ def register_api_routes(app) -> None:
 
     @app.route("/api/iot-hub/status", methods=["GET"])
     def api_iot_hub_status():
-        return jsonify(iot_hub_status_summary())
+        summary = dict(iot_hub_status_summary())
+        summary["telemetry"] = iot_hub_telemetry_status_summary(start_listener=True)
+        return jsonify(summary)
 
     @app.route("/api/iot-hub/device/twin", defaults={"device_id": None}, methods=["GET"])
     @app.route("/api/iot-hub/devices/<device_id>/twin", methods=["GET"])

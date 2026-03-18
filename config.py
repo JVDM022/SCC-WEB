@@ -104,6 +104,10 @@ BROADCAST_BLOB_CONTAINER = (get_env("BROADCAST_BLOB_CONTAINER", "documentation")
 BROADCAST_BLOB_PATH_PREFIX = (get_env("BROADCAST_BLOB_PATH_PREFIX", "broadcast") or "broadcast").strip() or "broadcast"
 IOTHUB_CONNECTION_STRING = (get_env("IOTHUB_CONNECTION_STRING", "") or "").strip()
 IOTHUB_DEFAULT_DEVICE_ID = (get_env("IOTHUB_DEFAULT_DEVICE_ID", "") or "").strip()
+IOTHUB_EVENTHUB_CONNECTION_STRING = (get_env("IOTHUB_EVENTHUB_CONNECTION_STRING", "") or "").strip()
+IOTHUB_EVENTHUB_CONSUMER_GROUP = (
+    get_env("IOTHUB_EVENTHUB_CONSUMER_GROUP", "$Default") or "$Default"
+).strip() or "$Default"
 IOTHUB_OTA_MAX_EXECUTION_SECONDS = int(
     get_env("IOTHUB_OTA_MAX_EXECUTION_SECONDS", "3600") or "3600"
 )

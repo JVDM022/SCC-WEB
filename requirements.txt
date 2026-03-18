@@ -4,3 +4,4 @@ gunicorn
 psycopg2-binary
 requests
 azure-storage-blob
+azure-eventhub

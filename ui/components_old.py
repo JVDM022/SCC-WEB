@@ -7,7 +7,7 @@ from flask import current_app, has_app_context
 from reactpy import component, event, hooks, html
 
 from config import DOC_TYPE_FILTER_ALL, ENTITY_DEFS, PHASES, PHASE_TO_PERCENT
-from services.azure_relay import load_heater_telemetry_safe, send_heater_command
+from services.heater_telemetry_source import load_heater_telemetry_safe, send_heater_command
 from services.dashboard import (
     bom_status_class,
     default_values_for,

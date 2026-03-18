@@ -8,7 +8,7 @@ from flask import current_app, has_app_context
 from reactpy import component, event, hooks, html
 
 from config import DOC_TYPE_FILTER_ALL, ENTITY_DEFS, PHASES, PHASE_TO_PERCENT
-from services.azure_relay import load_heater_telemetry_safe, send_heater_command
+from services.heater_telemetry_source import load_heater_telemetry_safe, send_heater_command
 from services.blob_export import export_broadcast_csv_to_blob
 from services.dashboard import (
     bom_status_class,
@@ -24,6 +24,7 @@ from services.dashboard import (
     update_project,
 )
 from services.iot_hub import get_device_twin, iot_hub_status_summary, patch_device_ota_target
+from services.iot_hub_telemetry import iot_hub_telemetry_status_summary
 from services.telemetry import coerce_float, telemetry_log_sample_count
 from ui.styles import GLASS_CSS
 
@@ -281,6 +282,7 @@ def empty_iot_hub_state() -> Dict[str, Any]:
         "sdk_available": True,
         "transport": "rest",
         "sdk_error": "",
+        "telemetry": {},
         "twin": None,
         "error": "",
     }
@@ -308,6 +310,7 @@ def load_iot_hub_snapshot_safe() -> Dict[str, Any]:
         return snapshot
 
     snapshot.update(status)
+    snapshot["telemetry"] = iot_hub_telemetry_status_summary(start_listener=True)
     if not status.get("configured"):
         snapshot["error"] = str(status.get("sdk_error") or "")
         return snapshot
@@ -335,9 +338,9 @@ def display_value(value: Any, fallback: str = "--") -> str:
 
 def iot_pill_class(value: Any) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"connected", "enabled", "success", "succeeded", "complete", "completed"}:
+    if normalized in {"connected", "enabled", "success", "succeeded", "complete", "completed", "listening"}:
         return "pill-success"
-    if normalized in {"downloading", "downloaded", "rebooting", "pending_verify", "running"}:
+    if normalized in {"downloading", "downloaded", "rebooting", "pending_verify", "running", "waiting"}:
         return "pill-info"
     if normalized in {"failed", "error", "disabled", "disconnected"}:
         return "pill-danger"
@@ -1084,11 +1087,13 @@ def App():
 
     def render_iot_hub_card() -> Dict:
         twin = iot_hub.get("twin") or {}
+        telemetry_status = iot_hub.get("telemetry") or {}
         desired_ota = ((twin.get("ota") or {}).get("desired") or {})
         reported_ota = ((twin.get("ota") or {}).get("reported") or {})
 
         device_id = display_value(twin.get("device_id") or iot_hub.get("default_device_id"))
         connection_state = display_value(twin.get("connection_state"), "Unknown")
+        listener_state = "Listening" if telemetry_status.get("listening") else "Waiting"
         device_status = display_value(twin.get("status"), "Unknown")
         current_version = display_value(reported_ota.get("currentVersion"))
         target_version = display_value(desired_ota.get("targetVersion") or reported_ota.get("targetVersion"))
@@ -1097,6 +1102,7 @@ def App():
         rollout_id = display_value(desired_ota.get("rolloutId") or reported_ota.get("rolloutId"))
         last_activity = format_iot_timestamp(twin.get("last_activity_time"))
         last_attempt = format_iot_timestamp(reported_ota.get("lastAttemptAt"))
+        last_event = format_iot_timestamp(telemetry_status.get("last_event_at"))
         artifact_url = str(desired_ota.get("artifactUrl") or "").strip()
         sha256 = display_value(desired_ota.get("sha256"))
         size_label = display_value(desired_ota.get("size"))
@@ -1147,6 +1153,11 @@ def App():
                 ),
                 html.div(
                     {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Telemetry"),
+                    html.span({"class": f"pill {iot_pill_class(listener_state)}"}, listener_state),
+                ),
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
                     html.span({"class": "stat-label"}, "Firmware"),
                     html.span({"class": "stat-value"}, current_version),
                 ),
@@ -1164,6 +1175,11 @@ def App():
                     {"class": "stat-box glass-surface glass-panel"},
                     html.span({"class": "stat-label"}, "Device Status"),
                     html.span({"class": f"pill {iot_pill_class(device_status)}"}, device_status),
+                ),
+                html.div(
+                    {"class": "stat-box glass-surface glass-panel"},
+                    html.span({"class": "stat-label"}, "Last Event"),
+                    html.span({"class": "stat-value stat-value-sm"}, last_event),
                 ),
             ),
             html.div(
