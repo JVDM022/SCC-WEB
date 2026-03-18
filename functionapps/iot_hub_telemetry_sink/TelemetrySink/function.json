@@ -1,0 +1,13 @@
+{
+  "scriptFile": "__init__.py",
+  "bindings": [
+    {
+      "type": "eventHubTrigger",
+      "direction": "in",
+      "name": "event",
+      "eventHubName": "%IOTHUB_EVENTHUB_NAME%",
+      "connection": "IOTHUB_EVENTHUB_CONNECTION_STRING",
+      "consumerGroup": "%IOTHUB_EVENTHUB_CONSUMER_GROUP%"
+    }
+  ]
+}

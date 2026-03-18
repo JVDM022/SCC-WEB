@@ -89,6 +89,21 @@ def init_db(db) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS heater_telemetry_latest (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            temperature_c DOUBLE PRECISION,
+            heat INTEGER,
+            motor INTEGER,
+            kill_state INTEGER,
+            system_on INTEGER,
+            uptime_seconds INTEGER,
+            source_timestamp TEXT,
+            device_id TEXT,
+            raw_payload JSONB,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS card_state (
             key TEXT PRIMARY KEY,
             position INTEGER,

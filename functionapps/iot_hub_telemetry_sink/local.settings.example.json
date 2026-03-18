@@ -1,0 +1,13 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "DATABASE_URL": "postgresql://username:password@hostname:5432/database_name?sslmode=require",
+    "DATABASE_CONNECT_TIMEOUT": "15",
+    "IOTHUB_EVENTHUB_CONNECTION_STRING": "Endpoint=sb://your-iothub-namespace.servicebus.windows.net/;SharedAccessKeyName=telemetry-sink;SharedAccessKey=your-eventhub-key;EntityPath=your-hub",
+    "IOTHUB_EVENTHUB_NAME": "your-hub-eventhub-path",
+    "IOTHUB_EVENTHUB_CONSUMER_GROUP": "telemetry-sink",
+    "TELEMETRY_DEVICE_ID": "esp32-relay-01"
+  }
+}
