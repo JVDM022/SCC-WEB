@@ -23,7 +23,7 @@ from services.dashboard import (
     update_project,
 )
 from services.iot_hub import get_device_twin, iot_hub_status_summary, patch_device_ota_target
-from services.telemetry import telemetry_log_sample_count
+from services.telemetry import coerce_float, telemetry_log_sample_count
 from ui.styles import GLASS_CSS
 
 
@@ -248,6 +248,12 @@ def empty_telemetry_state() -> Dict[str, Any]:
     }
 
 
+def normalize_telemetry_state(telemetry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(telemetry or {})
+    normalized["temperature"] = coerce_float(normalized.get("temperature"))
+    return normalized
+
+
 def telemetry_has_signal(telemetry: Dict[str, Any]) -> bool:
     return any(
         telemetry.get(key) is not None
@@ -369,7 +375,7 @@ def App():
         set_data(load_dashboard_data_safe())
 
     def load_telemetry_snapshot() -> None:
-        next_telemetry = load_heater_telemetry_safe()
+        next_telemetry = normalize_telemetry_state(load_heater_telemetry_safe())
         set_telemetry(lambda previous: merged_telemetry_state(previous, next_telemetry))
         set_telemetry_samples(telemetry_log_sample_count())
 
@@ -969,8 +975,8 @@ def App():
 
     # Telemetry and status display
     def render_telemetry_card() -> Dict:
-        temp = telemetry.get("temperature")
-        temp_label = f"{float(temp):.1f}°C" if isinstance(temp, (int, float)) else "--"
+        temp = coerce_float(telemetry.get("temperature"))
+        temp_label = f"{float(temp):.1f}°C" if temp is not None else "--"
         
         heater_on = telemetry.get("heater_on")
         heater_label = "ON" if heater_on is True else ("OFF" if heater_on is False else "Unknown")

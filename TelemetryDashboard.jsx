@@ -24,6 +24,54 @@ function normalizeBoolean(value) {
   return null;
 }
 
+function normalizeNumber(value) {
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") {
+    return null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  let text = String(value).trim().replace(/\u2212/g, "-");
+  if (!text) {
+    return null;
+  }
+
+  if (text.includes(",") && text.includes(".")) {
+    if (text.lastIndexOf(",") > text.lastIndexOf(".")) {
+      text = text.replaceAll(".", "").replace(",", ".");
+    } else {
+      text = text.replaceAll(",", "");
+    }
+  } else if ((text.match(/,/g) || []).length === 1 && !text.includes(".")) {
+    text = text.replace(",", ".");
+  }
+
+  const direct = Number(text);
+  if (Number.isFinite(direct)) {
+    return direct;
+  }
+
+  const match = text.match(/[-+]?(?:\d+(?:[.,]\d+)?|\.\d+)/);
+  if (!match) {
+    return null;
+  }
+
+  let token = match[0];
+  if (token.includes(",") && token.includes(".")) {
+    if (token.lastIndexOf(",") > token.lastIndexOf(".")) {
+      token = token.replaceAll(".", "").replace(",", ".");
+    } else {
+      token = token.replaceAll(",", "");
+    }
+  } else if (token.includes(",") && !token.includes(".")) {
+    token = token.replace(",", ".");
+  }
+
+  const parsed = Number(token);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function normalizeUptimeSeconds(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -76,10 +124,7 @@ function formatUptime(seconds) {
 
 function normalizeTelemetry(payload) {
   const rawTemperature = payload?.temperature ?? payload?.temp ?? payload?.temperature_c;
-  const temperature =
-    rawTemperature === null || rawTemperature === undefined || rawTemperature === ""
-      ? null
-      : Number(rawTemperature);
+  const temperature = normalizeNumber(rawTemperature);
   const heaterOn = normalizeBoolean(
     payload?.heater_on ?? payload?.heaterOn ?? payload?.heater ?? payload?.on
   );
