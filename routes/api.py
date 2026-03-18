@@ -28,10 +28,27 @@ from services.dashboard import (
     update_progress,
     update_project,
 )
+from services.iot_hub import (
+    get_device_twin,
+    get_job,
+    iot_hub_status_summary,
+    patch_device_desired_properties,
+    patch_device_ota_target,
+    schedule_ota_rollout,
+)
 from services.telemetry import ensure_telemetry_log_file, telemetry_log_sample_count
 
 
 def register_api_routes(app) -> None:
+    def iot_hub_error_response(exc: Exception):
+        message = str(exc)
+        lowered = message.lower()
+        if "required" in lowered or "must be" in lowered:
+            return jsonify({"error": message}), 400
+        if "not configured" in lowered or "not installed" in lowered:
+            return jsonify({"error": message}), 503
+        return jsonify({"error": message}), 502
+
     @app.route("/api/data")
     def api_data():
         return jsonify(
@@ -94,6 +111,92 @@ def register_api_routes(app) -> None:
             app.logger.exception("Failed to send heater command")
             return jsonify({"error": str(exc)}), 502
         return jsonify(result)
+
+    @app.route("/api/iot-hub/status", methods=["GET"])
+    def api_iot_hub_status():
+        return jsonify(iot_hub_status_summary())
+
+    @app.route("/api/iot-hub/device/twin", defaults={"device_id": None}, methods=["GET"])
+    @app.route("/api/iot-hub/devices/<device_id>/twin", methods=["GET"])
+    def api_iot_hub_device_twin(device_id: str | None):
+        try:
+            return jsonify(get_device_twin(device_id))
+        except Exception as exc:
+            app.logger.exception("Failed to fetch IoT Hub device twin")
+            return iot_hub_error_response(exc)
+
+    @app.route("/api/iot-hub/device/desired", defaults={"device_id": None}, methods=["POST"])
+    @app.route("/api/iot-hub/devices/<device_id>/desired", methods=["POST"])
+    def api_iot_hub_patch_desired(device_id: str | None):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Expected a JSON object body"}), 400
+
+        desired_patch = payload.get("desired")
+        if desired_patch is None:
+            desired_patch = payload
+
+        try:
+            return jsonify(patch_device_desired_properties(desired_patch, device_id=device_id))
+        except Exception as exc:
+            app.logger.exception("Failed to patch IoT Hub desired properties")
+            return iot_hub_error_response(exc)
+
+    @app.route("/api/iot-hub/device/ota", defaults={"device_id": None}, methods=["POST"])
+    @app.route("/api/iot-hub/devices/<device_id>/ota", methods=["POST"])
+    def api_iot_hub_patch_ota(device_id: str | None):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Expected a JSON object body"}), 400
+
+        ota_patch = payload.get("ota")
+        if ota_patch is None:
+            ota_patch = payload
+
+        try:
+            return jsonify(patch_device_ota_target(ota_patch, device_id=device_id))
+        except Exception as exc:
+            app.logger.exception("Failed to patch IoT Hub OTA desired state")
+            return iot_hub_error_response(exc)
+
+    @app.route("/api/iot-hub/rollouts/ota", methods=["POST"])
+    def api_iot_hub_rollout_ota():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Expected a JSON object body"}), 400
+
+        ota_patch = payload.get("ota")
+        if ota_patch is None:
+            ota_patch = payload.get("desired")
+        query_condition = payload.get("query_condition") or payload.get("queryCondition")
+        job_id = payload.get("job_id") or payload.get("jobId")
+        start_time = payload.get("start_time") or payload.get("startTime")
+        max_execution_time = (
+            payload.get("max_execution_time_in_seconds")
+            or payload.get("maxExecutionTimeInSeconds")
+        )
+
+        try:
+            return jsonify(
+                schedule_ota_rollout(
+                    ota_patch=ota_patch,
+                    query_condition=str(query_condition or ""),
+                    job_id=str(job_id or "") or None,
+                    start_time=str(start_time or "") or None,
+                    max_execution_time_in_seconds=max_execution_time,
+                )
+            )
+        except Exception as exc:
+            app.logger.exception("Failed to schedule IoT Hub OTA rollout job")
+            return iot_hub_error_response(exc)
+
+    @app.route("/api/iot-hub/jobs/<job_id>", methods=["GET"])
+    def api_iot_hub_job(job_id: str):
+        try:
+            return jsonify(get_job(job_id))
+        except Exception as exc:
+            app.logger.exception("Failed to fetch IoT Hub job")
+            return iot_hub_error_response(exc)
 
     @app.route("/api/system-status/telemetry-log", methods=["GET"])
     def api_telemetry_log_meta():

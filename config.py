@@ -102,6 +102,11 @@ BROADCAST_ENDPOINT_PAYLOAD_JSON = (get_env("BROADCAST_ENDPOINT_PAYLOAD_JSON", ""
 AZURE_STORAGE_CONNECTION_STRING = (get_env("AZURE_STORAGE_CONNECTION_STRING", "") or "").strip()
 BROADCAST_BLOB_CONTAINER = (get_env("BROADCAST_BLOB_CONTAINER", "documentation") or "documentation").strip() or "documentation"
 BROADCAST_BLOB_PATH_PREFIX = (get_env("BROADCAST_BLOB_PATH_PREFIX", "broadcast") or "broadcast").strip() or "broadcast"
+IOTHUB_CONNECTION_STRING = (get_env("IOTHUB_CONNECTION_STRING", "") or "").strip()
+IOTHUB_DEFAULT_DEVICE_ID = (get_env("IOTHUB_DEFAULT_DEVICE_ID", "") or "").strip()
+IOTHUB_OTA_MAX_EXECUTION_SECONDS = int(
+    get_env("IOTHUB_OTA_MAX_EXECUTION_SECONDS", "3600") or "3600"
+)
 TELEMETRY_LOG_PATH = _resolved_telemetry_log_path()
 TELEMETRY_LOG_HEADERS = [
     "timestamp",
