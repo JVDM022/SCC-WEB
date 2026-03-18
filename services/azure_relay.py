@@ -73,6 +73,21 @@ def azure_json_request(method: str, url: str, payload: Dict[str, Any] | None = N
     return body, response.status_code
 
 
+_TEMPERATURE_VALUE_RE = r"[-+]?(?:\d+(?:[.,]\d+)?|\.\d+)"
+
+
+def _extract_labeled_temperature(line: str) -> str | None:
+    patterns = (
+        rf"\btemp(?:erature)?\b\s*[:=]\s*({_TEMPERATURE_VALUE_RE})(?:\s*(?:°|deg(?:rees)?)\s*[cf])?",
+        rf"\btemp(?:erature)?\b\s+({_TEMPERATURE_VALUE_RE})(?:\s*(?:°|deg(?:rees)?)\s*[cf])?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, line, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
+
+
 def parse_serial_telemetry_line(line: str) -> Dict[str, Any]:
     fields: Dict[str, str] = {}
     for part in line.split(","):
@@ -84,10 +99,9 @@ def parse_serial_telemetry_line(line: str) -> Dict[str, Any]:
         if key:
             fields[key] = value
 
-    if "temp" not in fields:
-        match = re.search(r"\btemp(?:erature)?\s*=\s*([-+]?\d+(?:\.\d+)?)", line, flags=re.IGNORECASE)
-        if match:
-            fields["temp"] = match.group(1)
+    extracted_temperature = _extract_labeled_temperature(line)
+    if extracted_temperature is not None:
+        fields["temp"] = extracted_temperature
 
     if "heat" not in fields:
         match = re.search(r"\bheat(?:er)?\s*=\s*([A-Za-z0-9_-]+)", line, flags=re.IGNORECASE)

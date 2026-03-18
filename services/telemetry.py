@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -9,13 +10,46 @@ from config import TELEMETRY_LOG_HEADERS, TELEMETRY_LOG_LOCK, TELEMETRY_LOG_PATH
 
 _TELEMETRY_LOG_COUNT_CACHE: int | None = None
 _TELEMETRY_LOG_COUNT_SIGNATURE: tuple[int, int] | None = None
+_FLOAT_TOKEN_RE = re.compile(r"[-+]?(?:\d+(?:[.,]\d+)?|\.\d+)")
+
+
+def _parse_float_text(text: str) -> float | None:
+    normalized = text.strip().replace("−", "-")
+    if not normalized:
+        return None
+
+    if "," in normalized and "." in normalized:
+        if normalized.rfind(",") > normalized.rfind("."):
+            normalized = normalized.replace(".", "").replace(",", ".")
+        else:
+            normalized = normalized.replace(",", "")
+    elif normalized.count(",") == 1 and "." not in normalized:
+        normalized = normalized.replace(",", ".")
+
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
 
 
 def coerce_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+    if value is None or value == "" or isinstance(value, bool):
         return None
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    direct = _parse_float_text(text)
+    if direct is not None:
+        return direct
+
+    match = _FLOAT_TOKEN_RE.search(text)
+    if not match:
+        return None
+    return _parse_float_text(match.group(0))
 
 
 def coerce_bool(value: Any) -> bool | None:
