@@ -173,6 +173,32 @@ def patch_device_ota_target(ota_patch: Dict[str, Any], device_id: str | None = N
     return patch_device_desired_properties({"ota": ota_patch}, device_id=device_id)
 
 
+def invoke_direct_method(
+    method_name: str,
+    payload: Dict[str, Any] | None = None,
+    *,
+    device_id: str | None = None,
+    connect_timeout_in_seconds: int = 5,
+    response_timeout_in_seconds: int = 30,
+) -> Dict[str, Any]:
+    resolved_method_name = str(method_name or "").strip()
+    if not resolved_method_name:
+        raise RuntimeError("method_name is required")
+
+    target_device_id = resolve_device_id(device_id)
+    body = {
+        "methodName": resolved_method_name,
+        "responseTimeoutInSeconds": int(response_timeout_in_seconds),
+        "connectTimeoutInSeconds": int(connect_timeout_in_seconds),
+        "payload": payload or {},
+    }
+    return _iot_hub_request(
+        "POST",
+        f"/twins/{quote(target_device_id, safe='')}/methods",
+        json_body=body,
+    )
+
+
 def schedule_ota_rollout(
     ota_patch: Dict[str, Any],
     query_condition: str,
