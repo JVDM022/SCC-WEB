@@ -102,11 +102,17 @@ def register_api_routes(app) -> None:
             return jsonify({"error": "Field 'value' is required"}), 400
 
         command_type = str(payload.get("type") or "").strip().upper()
-        if command_type and command_type != "KILL":
-            return jsonify({"error": "Only command type 'KILL' is supported"}), 400
+        if command_type in ("", "KILL"):
+            command_value = payload.get("value")
+        elif command_type in ("SHUTDOWN", "STOP", "OFF"):
+            command_value = 1
+        elif command_type in ("RESUME", "START", "ON", "UNKILL"):
+            command_value = 0
+        else:
+            return jsonify({"error": "Supported command types are KILL, SHUTDOWN, and RESUME"}), 400
 
         try:
-            result = send_heater_command(payload.get("value"))
+            result = send_heater_command(command_value)
         except Exception as exc:
             app.logger.exception("Failed to send heater command")
             return jsonify({"error": str(exc)}), 502

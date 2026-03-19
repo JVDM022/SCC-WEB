@@ -636,7 +636,7 @@ def App():
             set_control_feedback("")
             try:
                 send_heater_command(kill_value)
-                set_control_feedback("KILL command sent." if kill_value == 1 else "UNKILL command sent.")
+                set_control_feedback("Shutdown command sent." if kill_value == 1 else "Resume command sent.")
             except Exception as exc:
                 _logger().exception("Failed to send heater command")
                 set_control_feedback(f"Command failed: {exc}")
@@ -1000,7 +1000,7 @@ def App():
         heater_class = "pill-warning" if heater_on is True else ("pill-muted" if heater_on is False else "pill-muted")
         
         kill_state = telemetry.get("kill_state")
-        kill_label = "KILLED" if kill_state is True else ("ACTIVE" if kill_state is False else "Unknown")
+        kill_label = "SHUT DOWN" if kill_state is True else ("RUNNING" if kill_state is False else "Unknown")
         kill_class = "pill-danger" if kill_state is True else ("pill-success" if kill_state is False else "pill-muted")
         
         telemetry_system_on = derive_system_on(telemetry)
@@ -1040,7 +1040,7 @@ def App():
                 ),
                 html.div(
                     {"class": "stat-box glass-surface glass-panel"},
-                    html.span({"class": "stat-label"}, "Kill State"),
+                    html.span({"class": "stat-label"}, "Shutdown State"),
                     html.span({"class": f"pill {kill_class}"}, kill_label),
                 ),
                 html.div(
@@ -1061,8 +1061,8 @@ def App():
             html.div(
                 {"class": "button-group"},
                 render_button("Refresh", class_="btn glass-btn", on_click=lambda e: refresh_telemetry_data()),
-                render_button("KILL", class_="btn glass-btn danger", on_click=lambda e: send_heater_command_action(1)),
-                render_button("UNKILL", class_="btn glass-btn", on_click=lambda e: send_heater_command_action(0)),
+                render_button("Shut Off", class_="btn glass-btn danger", on_click=lambda e: send_heater_command_action(1)),
+                render_button("Resume", class_="btn glass-btn", on_click=lambda e: send_heater_command_action(0)),
             ),
             html.p({"class": "meta"}, f"Logged: {telemetry_samples} samples"),
         )

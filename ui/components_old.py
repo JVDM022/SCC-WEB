@@ -95,7 +95,7 @@ def App():
             set_control_feedback("")
             try:
                 send_heater_command(value)
-                set_control_feedback("KILL command sent." if value == 1 else "UNKILL command sent.")
+                set_control_feedback("Shutdown command sent." if value == 1 else "Resume command sent.")
             except Exception as exc:
                 _logger().exception("Failed to send heater command")
                 set_control_feedback(f"Command failed: {exc}")
@@ -589,10 +589,10 @@ def App():
 
         kill_state = telemetry.get("kill_state")
         if kill_state is True:
-            kill_label = "KILLED"
+            kill_label = "SHUT DOWN"
             kill_class = "pill-danger"
         elif kill_state is False:
-            kill_label = "ACTIVE"
+            kill_label = "RUNNING"
             kill_class = "pill-success"
         else:
             kill_label = "Unknown"
@@ -634,7 +634,7 @@ def App():
                 ),
                 html.div(
                     {"class": "glass-surface glass-panel", "style": {"padding": "10px"}},
-                    html.div({"class": "meta"}, "Kill State"),
+                    html.div({"class": "meta"}, "Shutdown State"),
                     html.span({"class": f"pill {kill_class}"}, kill_label),
                 ),
             ),
@@ -642,11 +642,11 @@ def App():
                 {"class": "form-actions"},
                 html.button(
                     {"class": "btn glass-btn primary", "type": "button", "disabled": is_busy, "on_click": lambda e: send_kill_command(1)},
-                    "KILL",
+                    "Shut Off",
                 ),
                 html.button(
                     {"class": "btn glass-btn", "type": "button", "disabled": is_busy, "on_click": lambda e: send_kill_command(0)},
-                    "UNKILL",
+                    "Resume",
                 ),
             ),
             html.div(
@@ -717,7 +717,7 @@ def App():
                 ),
             )
         if entity == "system_status":
-            section_meta = "System health, live heater telemetry, and kill controls."
+            section_meta = "System health, live heater telemetry, and shutdown controls."
             return html.section(
                 {"class": "card glass-surface glass-card", "key": entity},
                 html.div(

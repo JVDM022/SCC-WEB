@@ -312,7 +312,7 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
     };
   }, []);
 
-  const sendKillCommand = async (value) => {
+  const sendShutdownCommand = async (value) => {
     setIsSending(true);
     setCommandStatus("");
 
@@ -323,7 +323,7 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        body: JSON.stringify({ type: "KILL", value }),
+        body: JSON.stringify({ type: value === 1 ? "SHUTDOWN" : "RESUME", value }),
       });
 
       const body = await response.json().catch(() => ({}));
@@ -331,7 +331,7 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
         throw new Error(body.error || `Command request failed (${response.status})`);
       }
 
-      setCommandStatus(value === 1 ? "KILL command sent" : "UNKILL command sent");
+      setCommandStatus(value === 1 ? "Shutdown command sent" : "Resume command sent");
       setError("");
     } catch (err) {
       setError(err?.message || "Unable to send command");
@@ -359,8 +359,8 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
         </div>
 
         <div style={{ border: "1px solid #d4d4d8", borderRadius: 8, padding: 12 }}>
-          <strong>Kill State</strong>
-          <div>{telemetry ? (telemetry.kill ? "KILLED" : "ACTIVE") : "--"}</div>
+          <strong>Shutdown State</strong>
+          <div>{telemetry ? (telemetry.kill ? "SHUT DOWN" : "RUNNING") : "--"}</div>
         </div>
 
         <div style={{ border: "1px solid #d4d4d8", borderRadius: 8, padding: 12 }}>
@@ -381,11 +381,11 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-        <button type="button" onClick={() => sendKillCommand(1)} disabled={isSending}>
-          KILL
+        <button type="button" onClick={() => sendShutdownCommand(1)} disabled={isSending}>
+          Shut Off
         </button>
-        <button type="button" onClick={() => sendKillCommand(0)} disabled={isSending}>
-          UNKILL
+        <button type="button" onClick={() => sendShutdownCommand(0)} disabled={isSending}>
+          Resume
         </button>
       </div>
     </section>
