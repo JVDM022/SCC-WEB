@@ -5,9 +5,10 @@ from typing import Any, Callable, Dict
 
 from psycopg2.extras import Json, RealDictCursor
 
+from config import TELEMETRY_STALE_SECONDS
 from db import get_db_pool
 from services.azure_relay import coerce_uptime_seconds
-from services.pacific_time import format_pacific_timestamp, pacific_now
+from services.pacific_time import format_pacific_timestamp, pacific_now, parse_timestamp
 from services.telemetry import coerce_bool, coerce_float
 
 
@@ -74,8 +75,13 @@ def _bool_to_int(value: Any) -> int | None:
 
 def _row_to_telemetry(row: Dict[str, Any]) -> Dict[str, Any]:
     updated_at = row.get("updated_at")
-    fetched_at = format_pacific_timestamp(pacific_now())
+    now = pacific_now()
+    fetched_at = format_pacific_timestamp(now)
     stored_at = format_pacific_timestamp(updated_at)
+    updated_at_dt = parse_timestamp(updated_at)
+    age_seconds = None
+    if updated_at_dt is not None:
+        age_seconds = max(0, int((now - updated_at_dt.astimezone(now.tzinfo)).total_seconds()))
 
     return {
         "temperature": coerce_float(row.get("temperature_c")),
@@ -88,6 +94,8 @@ def _row_to_telemetry(row: Dict[str, Any]) -> Dict[str, Any]:
         "device_id": row.get("device_id"),
         "stored_at": stored_at,
         "fetched_at": fetched_at,
+        "age_seconds": age_seconds,
+        "stale": age_seconds is None or age_seconds > TELEMETRY_STALE_SECONDS,
         "error": "",
     }
 
@@ -173,5 +181,17 @@ def load_latest_telemetry_safe() -> Dict[str, Any]:
             "device_id": "",
             "stored_at": "",
             "fetched_at": format_pacific_timestamp(pacific_now()),
+            "age_seconds": None,
+            "stale": True,
             "error": str(exc),
         }
+
+
+def telemetry_is_fresh(telemetry: Dict[str, Any], *, max_age_seconds: int = TELEMETRY_STALE_SECONDS) -> bool:
+    age_seconds = telemetry.get("age_seconds")
+    if age_seconds is None:
+        return False
+    try:
+        return int(age_seconds) <= max_age_seconds
+    except (TypeError, ValueError):
+        return False

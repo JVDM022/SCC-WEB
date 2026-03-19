@@ -43,15 +43,6 @@ def load_dotenv(path: str | Path = PROJECT_ROOT / ".env") -> None:
 
 
 def get_env(name: str, default: str | None = None) -> str | None:
-    if name in _FILE_SOURCED_ENV_KEYS:
-        for candidate in (PROJECT_ROOT / ".env",):
-            parsed = _parse_env_file(candidate)
-            value = parsed.get(name)
-            if value is None:
-                continue
-            os.environ[name] = value
-            return value
-
     current = os.environ.get(name)
     if current is not None:
         return current
@@ -111,6 +102,7 @@ IOTHUB_EVENTHUB_CONSUMER_GROUP = (
 IOTHUB_OTA_MAX_EXECUTION_SECONDS = int(
     get_env("IOTHUB_OTA_MAX_EXECUTION_SECONDS", "3600") or "3600"
 )
+TELEMETRY_STALE_SECONDS = int(get_env("TELEMETRY_STALE_SECONDS", "15") or "15")
 TELEMETRY_LOG_PATH = _resolved_telemetry_log_path()
 TELEMETRY_LOG_HEADERS = [
     "timestamp",

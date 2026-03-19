@@ -156,6 +156,11 @@ function normalizeTelemetry(payload) {
   const uptimeSeconds = normalizeUptimeSeconds(
     payload?.uptime_seconds ?? payload?.uptime_s ?? payload?.uptime
   );
+  const storedAt = String(payload?.stored_at ?? payload?.storedAt ?? "");
+  const fetchedAt = String(payload?.fetched_at ?? payload?.fetchedAt ?? "");
+  const sourceTimestamp = String(payload?.source_timestamp ?? payload?.sourceTimestamp ?? "");
+  const stale = normalizeBoolean(payload?.stale) ?? false;
+  const error = typeof payload?.error === "string" ? payload.error : "";
 
   if (systemOn === null) {
     if (kill !== null) {
@@ -171,6 +176,12 @@ function normalizeTelemetry(payload) {
     kill,
     systemOn,
     uptimeSeconds,
+    storedAt,
+    fetchedAt,
+    sourceTimestamp,
+    stale,
+    error,
+    sampleKey: storedAt || sourceTimestamp || fetchedAt,
   };
 }
 
@@ -212,13 +223,18 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
         }
 
         setTelemetry(next);
-        setError("");
+        setError(next.error || "");
 
         setHistory((prev) => {
           const now = Date.now();
-          return [...prev, { timestamp: now, temperature: next.temperature }].filter(
-            (point) => now - point.timestamp <= HISTORY_WINDOW_MS
-          ).filter((point) => point.temperature !== null && !Number.isNaN(point.temperature));
+          const trimmed = prev.filter((point) => now - point.timestamp <= HISTORY_WINDOW_MS);
+          if (next.temperature === null || Number.isNaN(next.temperature)) {
+            return trimmed;
+          }
+          if (trimmed.length && trimmed[trimmed.length - 1].sampleKey === next.sampleKey) {
+            return trimmed;
+          }
+          return [...trimmed, { timestamp: now, temperature: next.temperature, sampleKey: next.sampleKey }];
         });
       } catch (err) {
         if (!cancelled) {
@@ -346,6 +362,10 @@ export default function TelemetryDashboard({ apiBaseUrl = "" }) {
 
       {error ? <p style={{ color: "#b91c1c" }}>{error}</p> : null}
       {commandStatus ? <p style={{ color: "#166534" }}>{commandStatus}</p> : null}
+      <p style={{ color: "#52525b", marginTop: 0 }}>
+        Last sample: {telemetry?.storedAt || telemetry?.sourceTimestamp || telemetry?.fetchedAt || "Never"}
+        {telemetry?.stale ? " (stale)" : ""}
+      </p>
 
       <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
         <div style={{ border: "1px solid #d4d4d8", borderRadius: 8, padding: 12 }}>

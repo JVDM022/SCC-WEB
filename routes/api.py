@@ -40,6 +40,12 @@ from services.telemetry import read_telemetry_log_csv, telemetry_log_sample_coun
 
 
 def register_api_routes(app) -> None:
+    def telemetry_has_signal(telemetry):
+        return any(
+            telemetry.get(key) is not None
+            for key in ("temperature", "heater_on", "motor_on", "kill_state", "system_on", "uptime_seconds")
+        )
+
     def iot_hub_error_response(exc: Exception):
         message = str(exc)
         lowered = message.lower()
@@ -89,7 +95,7 @@ def register_api_routes(app) -> None:
     @app.route("/api/telemetry", methods=["GET"])
     def api_telemetry():
         telemetry = load_heater_telemetry_safe()
-        if telemetry.get("error"):
+        if telemetry.get("error") and not telemetry_has_signal(telemetry):
             return jsonify({"error": telemetry["error"]}), 502
         return jsonify(telemetry)
 

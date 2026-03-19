@@ -248,7 +248,10 @@ def empty_telemetry_state() -> Dict[str, Any]:
         "kill_state": None,
         "system_on": None,
         "uptime_seconds": None,
+        "stored_at": "",
         "fetched_at": "",
+        "age_seconds": None,
+        "stale": True,
         "error": "",
     }
 
@@ -1015,12 +1018,15 @@ def App():
         uptime_seconds = telemetry.get("uptime_seconds")
         uptime_label = format_uptime(uptime_seconds) if uptime_seconds is not None else "--"
         reason = "" if telemetry_system_on is not None else system_status_row.get("reason", "")
+        last_sample = telemetry.get("stored_at") or telemetry.get("source_timestamp") or telemetry.get("fetched_at") or "Never"
+        if telemetry.get("stale"):
+            last_sample = f"{last_sample} (stale)"
         return html.section(
             {"class": "card glass-surface glass-card"},
             html.div(
                 {"class": "section-header"},
                 html.h2("System & Heater Control"),
-                html.p({"class": "meta"}, f"Last telemetry: {telemetry.get('fetched_at') or 'Never'}"),
+                html.p({"class": "meta"}, f"Last telemetry: {last_sample}"),
             ),
             (html.p(
                 {"class": "meta", "style": {"color": "#b42318", "marginBottom": "0.75rem"}},
